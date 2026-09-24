@@ -1,6 +1,6 @@
 [project]
 name = "ai-forge"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI Forge: Jira support-ticket triage and fixing with GitHub Copilot CLI, Teams approvals and a token-saving code index"
 requires-python = ">=3.11"
 dependencies = [
@@ -26,3 +26,6 @@ include = ["forge*"]
 
 [tool.setuptools.package-data]
 forge = ["assets/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

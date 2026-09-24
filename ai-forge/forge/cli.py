@@ -18,6 +18,13 @@ def main() -> None:
     r = sub.add_parser("run", help="one pipeline cycle (scheduled)")
     r.add_argument("--force", action="store_true", help="ignore work hours")
     sub.add_parser("stats", help="token/call ledger summary")
+    sub.add_parser("status", help="my tickets and where each one is in the pipeline")
+    rp = sub.add_parser("report", help="savings report (HTML) for management")
+    rp.add_argument("--team", action="store_true", help="aggregate all runners from the shared folder")
+    rp.add_argument("--out", help="output .html path")
+    b = sub.add_parser("baseline", help="baseline experiment: plain Copilot vs Forge on closed tickets")
+    b.add_argument("tickets_dir", help="folder of ticket JSON files with an 'expected' block")
+    b.add_argument("--no-fix", action="store_true", help="compare analysis only (skip the fixer run)")
     a = ap.parse_args()
 
     if a.cmd == "setup":
@@ -58,6 +65,29 @@ def main() -> None:
     elif a.cmd == "run":
         from .pipeline import run_once
         run_once(force=a.force)
+    elif a.cmd == "status":
+        from . import config as C
+        from .store import Store
+        st = Store(C.load().db_path)
+        print("ticket | status | route | group | updated | pr")
+        for t in st.tickets():
+            print(" | ".join(str(t.get(k) or "-") for k in ("key", "status", "route", "group_id", "status_changed", "pr_url")))
+        for p in st.pending():
+            print(f"pending card {p['request_id']} ({p['kind']}) for {p['ticket_key']} since {p['created']}")
+    elif a.cmd == "report":
+        from pathlib import Path
+        from . import config as C
+        from .metrics import report
+        from .store import Store
+        cfg = C.load()
+        print(report(cfg, Store(cfg.db_path), team=a.team, out=Path(a.out) if a.out else None))
+    elif a.cmd == "baseline":
+        from pathlib import Path
+        from . import config as C
+        from .metrics import baseline
+        out = baseline(C.load(), Path(a.tickets_dir), with_fix=not a.no_fix)
+        print(out.read_text(encoding="utf-8"))
+        print(f"saved: {out}")
     elif a.cmd == "stats":
         from .copilot import _ledger
         rows = _ledger().execute(

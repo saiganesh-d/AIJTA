@@ -1,0 +1,15 @@
+{
+  "key": "SUP-103",
+  "summary": "Reports page timeout after deploy",
+  "description": "Since yesterday's deployment the monthly report times out after 30s in the PROD environment. Worked fine before the deploy. Is there a timeout setting?",
+  "type": "Support",
+  "assignee": "you@yourorg.example",
+  "updated": "2026-09-24T09:00:00.000+0000",
+  "component": "reports",
+  "priority": "Medium",
+  "reporter": "customer@client.example",
+  "labels": [
+    "support"
+  ],
+  "comments": []
+}

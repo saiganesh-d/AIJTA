@@ -1,28 +1,63 @@
 {
   "schema": 1,
-  "tool_version": "0.1.0",
+  "tool_version": "0.2.0",
   "jira": {
+    "mode": "api",
     "base_url": "https://jira.yourorg.example",
     "api_version": "2",
     "scope_jql": "project = SUP AND statusCategory != Done",
-    "support_issue_types": ["Support", "Bug", "Incident", "Service Request"]
+    "support_issue_types": [
+      "Support",
+      "Bug",
+      "Incident",
+      "Service Request"
+    ],
+    "support_labels": [
+      "support"
+    ],
+    "sprint_field": "customfield_10020",
+    "post_comments": true,
+    "verify_tls": true
   },
   "base_ref": "origin/main",
   "lead": "lead@yourorg.example",
-  "approvers": ["lead@yourorg.example", "sai@yourorg.example", "ravi@yourorg.example", "priya@yourorg.example"],
+  "approvers": [
+    "lead@yourorg.example",
+    "sai@yourorg.example",
+    "ravi@yourorg.example",
+    "priya@yourorg.example"
+  ],
   "members": {
-    "sai":   {"email": "sai@yourorg.example",   "daily_token_budget": 400000},
-    "ravi":  {"email": "ravi@yourorg.example",  "daily_token_budget": 400000},
-    "priya": {"email": "priya@yourorg.example", "daily_token_budget": 400000}
+    "sai": {
+      "name": "Sai",
+      "email": "sai@yourorg.example",
+      "github": "sai-gh",
+      "daily_token_budget": 400000
+    },
+    "ravi": {
+      "name": "Ravi",
+      "email": "ravi@yourorg.example",
+      "github": "ravi-gh",
+      "daily_token_budget": 400000
+    },
+    "priya": {
+      "name": "Priya",
+      "email": "priya@yourorg.example",
+      "github": "priya-gh",
+      "daily_token_budget": 400000
+    }
   },
-  "components_to_owner": {"billing": "ravi", "reports": "priya"},
+  "components_to_owner": {
+    "billing": "ravi",
+    "reports": "priya"
+  },
   "models": {
-    "forge-doctor":  "REPLACE_WITH_CHEAPEST_MODEL_ID",
-    "forge-config":  "REPLACE_WITH_CHEAP_MODEL_ID",
+    "forge-doctor": "REPLACE_WITH_CHEAPEST_MODEL_ID",
+    "forge-config": "REPLACE_WITH_CHEAP_MODEL_ID",
     "forge-analyst": "REPLACE_WITH_MID_MODEL_ID",
-    "forge-fixer":   "REPLACE_WITH_MID_MODEL_ID",
+    "forge-fixer": "REPLACE_WITH_MID_MODEL_ID",
     "forge-adapter": "REPLACE_WITH_MID_MODEL_ID",
-    "escalation":    "REPLACE_WITH_STRONG_MODEL_ID"
+    "escalation": "REPLACE_WITH_STRONG_MODEL_ID"
   },
   "thresholds": {
     "dedup_similarity": 0.88,
@@ -38,6 +73,27 @@
     "full": "pytest -q",
     "targeted": "pytest -q {test_path}"
   },
-  "work_hours": {"start": "09:00", "end": "20:00", "days": [1, 2, 3, 4, 5]},
-  "teams": {"channel_hint": "AI Forge Support"}
+  "work_hours": {
+    "start": "09:00",
+    "end": "20:00",
+    "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "savings": {
+    "minutes_triage_per_ticket": 15,
+    "minutes_root_cause_per_code_bug": 90,
+    "minutes_resolution_per_non_code": 30,
+    "minutes_fix_per_pr": 60,
+    "engineer_hourly_cost": 0,
+    "currency": "EUR",
+    "baseline_tokens_per_ticket": 0
+  },
+  "teams": {
+    "channel_hint": "AI Forge Support"
+  }
 }

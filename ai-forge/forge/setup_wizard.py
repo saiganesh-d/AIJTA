@@ -67,7 +67,10 @@ def trust_worktrees(cfg: C.Config) -> None:
 def schedule_task() -> str:
     exe = Path(sys.executable).with_name("forge.exe" if sys.platform == "win32" else "forge")
     if sys.platform == "win32":
-        cmd = ["schtasks", "/Create", "/TN", "AI-Forge", "/TR", f'"{exe}" run', "/SC", "MINUTE", "/MO", "10", "/F"]
+        # Hidden launcher: a console app started by Task Scheduler would flash a window every 10 minutes.
+        vbs = C.HOME / "forge-run.vbs"
+        vbs.write_text(f'CreateObject("WScript.Shell").Run """{exe}"" run", 0, False\r\n', encoding="utf-8")
+        cmd = ["schtasks", "/Create", "/TN", "AI-Forge", "/TR", f'wscript.exe "{vbs}"', "/SC", "MINUTE", "/MO", "10", "/F"]
         r = subprocess.run(cmd, capture_output=True, text=True)
         return "scheduled every 10 min (Task Scheduler: AI-Forge)" if r.returncode == 0 else f"schtasks failed: {r.stderr}"
     return f"add to crontab:  */10 * * * * {exe} run >> {C.HOME}/run.log 2>&1"
@@ -104,7 +107,8 @@ def run() -> None:
     C.save(cfg)
     cfg = C.load()
 
-    if not C.jira_token(email) or _ask("Update Jira token? (y/N)", "n").lower() == "y":
+    file_mode = (cfg.team.get("jira") or {}).get("mode") == "file"
+    if not file_mode and (not C.jira_token(email) or _ask("Update Jira token? (y/N)", "n").lower() == "y"):
         C.set_jira_token(email, getpass.getpass("Jira personal access token (stored in OS keychain): "))
 
     print("• MCP config:", write_mcp_config())
@@ -117,6 +121,11 @@ def run() -> None:
     build_repo_map(cfg.index_db, cfg.repo_map)
     print("•", schedule_task())
 
+    problems = C.validate_team(cfg.team, cfg.user_id)
+    if problems:
+        print("! team.json needs attention (the lead fixes this once for everyone):")
+        for pr in problems:
+            print("   -", pr)
     atomic_write(cfg.shared / "runners" / f"{cfg.user_id}.json",
                  {"schema": 1, "user": cfg.user_id, "status": "installed"})
     from .doctor import run as doctor

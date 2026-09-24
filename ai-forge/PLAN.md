@@ -4,7 +4,12 @@ Automates first-line analysis of Jira support tickets for a small team (3+ engin
 GitHub Copilot CLI, with human approval in Microsoft Teams. It runs entirely on team members'
 laptops, with no server, no open ports and no premium Power Automate connectors.
 
-**Status legend:** ✅ built in this repo · 🔧 to build (instructions below)
+**Status legend:** ✅ built in this repo · 🔧 to build · ⏳ optional / later
+
+**Status (2026-09-24):** every 🔧 item from the first version of this plan is built and covered by
+`tests/` (fake Copilot/gh CLIs, a real git repo with a bare origin, file-mode Jira). Still open: live
+calibration against your Copilot CLI version (§5.6, §5.16) and the optional embeddings (§5.5). See §9 for
+what was added beyond the plan.
 
 ---
 
@@ -93,13 +98,16 @@ ai-forge/
     copilot.py            ✅ agent runner: permissions, MCP, budget, token ledger, JSON extraction
     setup_wizard.py       ✅ onboarding, agent sync, scheduler
     doctor.py             ✅ health checks + live MCP-mode detection
-    pipeline.py           🔧 stages (skeleton with guards, heartbeat, index refresh)
-    jira.py               🔧 §5.3
-    store.py              🔧 §5.4 local SQLite cache
-    triage.py             🔧 §5.7–5.9
-    cards.py              🔧 §5.13
-    fixer.py              🔧 §5.14
-    conflicts.py          🔧 §5.15
+    pipeline.py           ✅ run cycle: lock, work hours, validation, self-update, stages, heartbeat
+    jira.py               ✅ §5.3 (Server/DC, Cloud, file mode)
+    store.py              ✅ §5.4 local SQLite cache
+    triage.py             ✅ §5.7–5.9
+    analyze.py            ✅ §5.11
+    cards.py              ✅ §5.13
+    fixer.py              ✅ §5.14
+    gitwt.py              ✅ worktrees, test runs, diff → symbols
+    conflicts.py          ✅ §5.15
+    metrics.py            ✅ §5.16 counts, savings report, baseline experiment
     assets/agents/        ✅ forge-analyst, forge-config, forge-fixer, forge-adapter, forge-doctor
     assets/cards/         ✅ approval, info, conflict
     assets/schemas/       ✅ analysis, decision, inflight, outbox, runner
@@ -117,7 +125,7 @@ Each section lists what to build, the interfaces, and **acceptance criteria (AC)
   `powershell -ExecutionPolicy Bypass -File "<shared>\tool\install.ps1"`.
 - The installer checks python ≥3.11, git, gh, copilot. It then creates `~/.ai-forge/venv`, installs
   the package and runs `forge setup`.
-- 🔧 **Auto-update:** at the start of `forge run`, compare `<shared>/tool/VERSION` with
+- ✅ **Auto-update:** at the start of `forge run`, compare `<shared>/tool/VERSION` with
   `~/.ai-forge/installed_version`. If newer, `pip install <shared>/tool` into the venv, update the
   file, log it and continue. Agents already sync every run (`sync_agents`).
 - **AC:** a new teammate goes from nothing to `forge doctor` all ✓ in under 15 minutes, with no manual file editing.
@@ -127,10 +135,10 @@ Each section lists what to build, the interfaces, and **acceptance criteria (AC)
 - `team.json` in the shared folder holds Jira settings, members, approvers, models, thresholds,
   test commands and work hours. The lead edits it once for everyone.
 - The Jira token lives in the OS keychain via `keyring`. Never write it to disk or to shared files.
-- 🔧 Validate `team.json` on load. Refuse to run on `REPLACE_*` model ids, and list the problems.
+- ✅ Validate `team.json` on load. Refuse to run on `REPLACE_*` model ids, and list the problems.
 - **AC:** grepping the shared folder and `~/.ai-forge` for the token finds nothing.
 
-### 5.3 Jira sync 🔧 `forge/jira.py`
+### 5.3 Jira sync ✅ `forge/jira.py`
 1. Build a `Jira` client for Server/DC (Bearer PAT, `/rest/api/2/search`, `startAt`) and Cloud
    (basic email+token, `/rest/api/3/search/jql`, `nextPageToken`, ADF→text).
 2. Use two queries per run:
@@ -149,7 +157,7 @@ Each section lists what to build, the interfaces, and **acceptance criteria (AC)
    from several people is grouped instead of analyzed twice.
 - **AC:** 500 tickets sync in under 60 s. A second run with no Jira changes makes 1–2 requests and no DB writes.
 
-### 5.4 Local store 🔧 `forge/store.py` (SQLite, `~/.ai-forge/forge.db`)
+### 5.4 Local store ✅ `forge/store.py` (SQLite, `~/.ai-forge/forge.db`)
 Tables: `tickets(key, summary, description, type, component, priority, sprint, reporter,
 updated, status, group_id, signature, embedding BLOB, attachments_json, raw_json)`,
 `sync_state`, `pending_requests(request_id, ticket_key, kind, created, reposted)`.
@@ -165,7 +173,7 @@ with side exits `skipped | duplicate | needs_info | info_sent | resolved | rejec
   everything else falls back to 60-line windows. Config files are indexed as 40-line windows.
 - It builds a call graph (by name) and SQLite FTS5 over identifier sub-words, strings and log messages.
 - `REPO_MAP.md` is a ~2k-token map of files ranked by in-degree.
-- 🔧 Optional: `pip install ai-forge[embeddings]` adds fastembed vectors for chunks, used for hybrid
+- ⏳ Optional: `pip install ai-forge[embeddings]` adds fastembed vectors for chunks, used for hybrid
   search, only if the corporate proxy allows the model download. FTS alone works well for code identifiers.
 - **AC:** `forge search "<error text>"` puts the right function in the top 3 for 8 of 10 past tickets.
 
@@ -176,11 +184,11 @@ config_lookup, related_tickets, inflight_changes`. It runs over stdio as a Copil
   `-p` mode. `forge doctor --live` tests this and sets `mcp_mode`:
   `agent` (MCP inside custom agents), `global` (MCP works only without `--agent`), or `off`
   (context pack only, which still works at a slightly higher token cost).
-- 🔧 If the mode is `global`, the runner passes the agent's instructions as a prompt prefix file
+- ✅ If the mode is `global`, the runner passes the agent's instructions as a prompt prefix file
   instead of `--agent`. Build this in `copilot.run_agent`.
 - **AC:** `forge doctor --live` reports a mode, and the ledger shows fewer input tokens with MCP on than off.
 
-### 5.7 Pre-classifier and router 🔧 `forge/triage.py`
+### 5.7 Pre-classifier and router ✅ `forge/triage.py`
 Free rules decide the **route** before any Copilot call:
 1. Not a support issue type or label → `skipped`.
 2. Too little information (description < 80 chars, no attachments, no stack trace) → Jira comment
@@ -195,7 +203,7 @@ Free rules decide the **route** before any Copilot call:
 - **AC:** on 30 historical tickets, rules route at least 90% the same way a human would, and fewer
   than 5% of real code bugs are sent to `forge-config`. The agent escalates those anyway.
 
-### 5.8 Grouping 🔧 `forge/triage.py`
+### 5.8 Grouping ✅ `forge/triage.py`
 Build candidate groups over *my* `ready` tickets using union-find:
 - Same `error_signature` → join.
 - Text similarity ≥ `group_similarity` (FTS/embedding) and same component → join.
@@ -204,7 +212,7 @@ Build candidate groups over *my* `ready` tickets using union-find:
 - **AC:** 4 tickets with 2 shared causes produce 2 Copilot calls. Split groups come back as separate
   `groups[]` entries, and each gets its own card.
 
-### 5.9 Dedup, past sprints and regression facts 🔧 `forge/triage.py`
+### 5.9 Dedup, past sprints and regression facts ✅ `forge/triage.py`
 For each group, find the top 3 similar past tickets from `analyses/` plus Jira team history. For
 each match with a known fix, compute **git facts** locally:
 - Fix commit: `pr_url`/`fix_commit` from the analysis, else `git log --grep=<KEY> <base_ref>`.
@@ -219,11 +227,11 @@ These go to `job.json.past_matches` as one-line facts, for example
 ### 5.10 Context pack ✅ `forge/context_pack.py`
 Priority order under `context_budget_tokens`: scrubbed tickets → code at stack-trace frames →
 call-graph neighbours → search hits → config matches → past matches, teammate overlaps and lessons.
-- 🔧 Wire `extras` from §5.9 and §5.15. Add `lessons/<component>.md` (the three most recent lines).
+- ✅ Wire `extras` from §5.9 and §5.15. Add `lessons/<component>.md` (the three most recent lines).
 - Demo: `forge context ticket.txt` prints the pack and its token estimate.
 - **AC:** median pack under 3k tokens, and the pack alone contains the root cause for most tickets.
 
-### 5.11 Analysis 🔧 `pipeline.analyze_groups`
+### 5.11 Analysis ✅ `forge/analyze.py`
 1. Create a detached worktree at `base_ref`: `~/.ai-forge/worktrees/analyze-<group>`.
 2. Write `.forge/job.json`, `.forge/context.md` and `.forge/REPO_MAP.md`. Add `.forge/` to the
    worktree's `info/exclude`.
@@ -243,7 +251,7 @@ call-graph neighbours → search hits → config matches → past matches, teamm
 - Setup reminds users to mark the folder "Always keep on this device".
 - **AC:** simultaneous writes from 3 laptops for an hour produce no parse errors and no processed conflict copies.
 
-### 5.13 Teams cards and decisions 🔧 `forge/cards.py` + flow (see `flows/TEAMS_FLOW.md`)
+### 5.13 Teams cards and decisions ✅ `forge/cards.py` + flow (see `flows/TEAMS_FLOW.md`)
 - Fill the templates in `assets/cards/`. Remove the `regression_banner` and `conflict_banner`
   containers when they don't apply. Add an @mention of the assignee.
 - Card types:
@@ -261,7 +269,7 @@ call-graph neighbours → search hits → config matches → past matches, teamm
 - On `reject`, append the comment to `lessons/<component>.md`. That's the learning loop.
 - **AC:** a hand-made decision file from a non-approver is ignored, and a stale card's click is ignored.
 
-### 5.14 Fix pipeline 🔧 `forge/fixer.py`
+### 5.14 Fix pipeline ✅ `forge/fixer.py`
 1. Before fixing, re-run the conflict check (§5.15). If it's `direct` and the teammate hasn't
    merged yet, send a conflict card and wait for the choice.
 2. Create worktree `-B forge/<key>` from `base_ref`, or from the teammate's branch on `build_on`.
@@ -281,7 +289,7 @@ call-graph neighbours → search hits → config matches → past matches, teamm
 - **AC:** no PR without a test that failed before and passes after, unless flagged "⚠ test not
   verified" in the PR title.
 
-### 5.15 Conflicts and post-merge revalidation 🔧 `forge/conflicts.py`
+### 5.15 Conflicts and post-merge revalidation ✅ `forge/conflicts.py`
 - **Detect** (at analysis and again before fixing) against other owners' `inflight/*.json`:
   - `direct`: my affected symbols ∩ their changed or planned symbols.
   - `dependency`: `index.impact(their_symbols, depth=2)` ∩ my symbols, or the reverse.
@@ -297,7 +305,7 @@ call-graph neighbours → search hits → config matches → past matches, teamm
 - **AC:** a scripted scenario (two branches editing the same function, one merged) produces a
   conflict card first, then an automatic rebase with a correct adapter result or a clear `needs_human`.
 
-### 5.16 Metrics and the baseline experiment 🔧
+### 5.16 Metrics and the baseline experiment ✅ `forge/metrics.py`
 - The ledger (`~/.ai-forge/ledger.db`, ✅) records agent, model, duration, estimated and parsed
   tokens, and the raw usage tail. Calibrate `copilot.parse_usage` against your CLI version's real
   output. Reconcile weekly with the GitHub billing usage report.
@@ -350,3 +358,31 @@ call-graph neighbours → search hits → config matches → past matches, teamm
 | Laptop offline | stale-heartbeat alert; the lead reassigns in Jira |
 | Wrong classification sends a real bug to info-only | "It's actually code → analyze" button; rejection lessons |
 | Token budget exhausted mid-day | queue continues next day; budget card to the lead |
+
+## 9. Additions beyond the original plan
+| Addition | Why |
+|---|---|
+| `forge report [--team]` → self-contained HTML (light/dark) | The management view: hours saved (estimate with visible assumptions), Copilot calls avoided, tokens per ticket, PRs, outcomes per person. No server; drop the file in SharePoint or Teams. Assumptions live in `team.json → savings`. |
+| `forge baseline <folder>` | Runs §5.16 end to end: plain Copilot vs Forge on the same commit *before* the real fix, with an automatic "root-cause file ok" column and a markdown table for the slide. |
+| Jira `file` mode (`jira.mode = "file"`) | Demos and teams whose Jira API is blocked from laptops: tickets come from exported JSON files, comments go to `comments.log`. See `examples/`. |
+| Single-instance OS lock | A 20-minute fix must not overlap the next 10-minute scheduled run. The lock is released automatically if the process dies. |
+| Crash recovery | Tickets left in `analyzing`/`fixing` by a killed run go back to `ready`/`approved`. |
+| Stage isolation + errors in heartbeat | One failing stage (e.g. Jira down) doesn't stop decisions, fixes or merge watch; errors are visible in `runners/<user>.json`. |
+| Per-writer lessons (`lessons/<component>__<user>.md`) | Keeps "one writer per file" for the rejection-learning loop; the lead's `lessons/<component>.md` is read too. |
+| Merge detection of my own PRs (`gh pr view`) | Sets `inflight` to `merged` with `merge_commit`, records `fix_commit` in `analyses/` (feeds §5.9) and removes the worktree. Closed PRs → `abandoned`. |
+| Tickets closed in Jira stop waiting | The hourly team-history query closes pending cards for tickets that were resolved elsewhere. |
+| Local tool copy before `pip install` | An in-tree pip build would write `build/` and `*.egg-info` into the synced shared folder for everyone. |
+| Hidden scheduled task on Windows (`wscript` launcher) | No console window flashing every 10 minutes; no admin rights needed. |
+| `copilot.cmd` resolution + prefix file for `global` mode | npm installs a `.cmd` shim on Windows that `subprocess` can't find by name, and cmd.exe mangles multi-line arguments. |
+| Fix commit lookup skips `Revert "…"` commits | Otherwise the revert itself (which mentions the key) is taken as the fix and a regression is missed. |
+| `forge status` | Where each of my tickets is, and which cards are pending. |
+
+## 10. Next steps (suggested)
+1. Phase 0 on two laptops: `forge doctor --live`, then calibrate `copilot.parse_usage` against the real usage
+   tail stored in `ledger.db → calls.raw_tail` (one regex change if the format differs).
+2. Run `forge baseline` on 10 closed tickets and put `baseline_tokens_per_ticket` into `team.json → savings`,
+   so the report shows the real token reduction.
+3. Agree the `savings` minutes with the team lead (they drive the "hours saved" tile), then schedule the weekly
+   digest flow (Flow 2) with a link to `forge report --team`.
+4. Later: optional embeddings (§5.5), OCR for screenshot attachments, and a Jira transition on `resolved`.
+

@@ -20,7 +20,12 @@ if ($pyver -ne "True") { Write-Host "Python 3.11+ required" -ForegroundColor Red
 New-Item -ItemType Directory -Force -Path $ForgeHome | Out-Null
 if (-not (Test-Path $Venv)) { python -m venv $Venv }
 & "$Venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
-& "$Venv\Scripts\python.exe" -m pip install --quiet "$PSScriptRoot"
+# Build from a local copy: an in-tree pip build would write build/ and *.egg-info into the synced shared folder.
+$Src = Join-Path $ForgeHome "tool-src"
+if (Test-Path $Src) { Remove-Item -Recurse -Force $Src }
+Copy-Item -Recurse "$PSScriptRoot" $Src
+Get-ChildItem $Src -Recurse -Directory -Include build,*.egg-info,__pycache__ | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+& "$Venv\Scripts\python.exe" -m pip install --quiet "$Src"
 Copy-Item "$PSScriptRoot\VERSION" "$ForgeHome\installed_version" -Force
 
 & "$Venv\Scripts\forge.exe" setup

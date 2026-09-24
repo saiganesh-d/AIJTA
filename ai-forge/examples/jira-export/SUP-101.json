@@ -1,0 +1,21 @@
+{
+  "key": "SUP-101",
+  "summary": "Order import fails for Dutch customer",
+  "description": "Import of order file stops at line 3.\nTraceback (most recent call last):\n  File \"/srv/app/orders/importer.py\", line 42, in import_line\n    price = parse_price(cols[3])\n  File \"/srv/app/orders/money.py\", line 17, in parse_price\n    return Decimal(text)\ndecimal.InvalidOperation: [<class 'decimal.ConversionSyntax'>]\n",
+  "type": "Support",
+  "assignee": "you@yourorg.example",
+  "updated": "2026-09-24T09:00:00.000+0000",
+  "component": "orders",
+  "priority": "High",
+  "reporter": "customer@client.example",
+  "labels": [
+    "support"
+  ],
+  "comments": [],
+  "attachments": [
+    {
+      "name": "import.log",
+      "text": "INFO start import\nERROR line 3 failed\nTraceback (most recent call last):\n  File \"/srv/app/orders/importer.py\", line 42, in import_line\n    price = parse_price(cols[3])\n  File \"/srv/app/orders/money.py\", line 17, in parse_price\n    return Decimal(text)\ndecimal.InvalidOperation: [<class 'decimal.ConversionSyntax'>]\n"
+    }
+  ]
+}

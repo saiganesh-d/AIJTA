@@ -1,6 +1,8 @@
 """Single entry point for every Copilot CLI call: agent, model, permissions, MCP, budget, token ledger."""
 import json
+import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -11,7 +13,13 @@ from pathlib import Path
 
 from .config import HOME, Config
 
-COPILOT_BIN = "copilot"
+COPILOT_BIN = os.environ.get("AI_FORGE_COPILOT_BIN", "copilot")
+AGENTS_DIR = Path.home() / ".copilot" / "agents"
+
+
+def copilot_exe() -> str:
+    """Resolve the CLI once (on Windows npm installs a copilot.cmd shim that subprocess can't find by name)."""
+    return shutil.which(COPILOT_BIN) or COPILOT_BIN
 
 # Permissions per agent. Deny always wins over allow in Copilot CLI.
 ALWAYS_DENY = ["shell(git push)", "shell(git commit)", "shell(git rebase)", "shell(git reset)", "shell(rm)",
@@ -22,6 +30,8 @@ PROFILES = {
     "forge-fixer":   {"allow": ["write", "forge-index", "shell(git diff)", "shell(git status)"], "deny": []},
     "forge-adapter": {"allow": ["write", "forge-index", "shell(git diff)", "shell(git status)"], "deny": []},
     "forge-doctor":  {"allow": ["forge-index"], "deny": ["write", "shell"]},
+    # plain Copilot for the baseline experiment (§5.16): what an engineer would run by hand
+    "baseline":      {"allow": ["write", "shell"], "deny": []},
 }
 
 USAGE_RX = {
@@ -43,6 +53,11 @@ class RunResult:
     duration_s: int
     usage: dict
     est_input_tokens: int
+
+    @property
+    def tokens(self) -> int:
+        """Parsed input+output when the CLI reported usage, else the local estimate."""
+        return (self.usage.get("input") or self.est_input_tokens) + (self.usage.get("output") or 0)
 
 
 def _ledger() -> sqlite3.Connection:
@@ -83,6 +98,18 @@ def mcp_config_path() -> Path:
     return HOME / "mcp.json"
 
 
+def agent_instructions(agent: str) -> str:
+    """Body of the synced agent file without its YAML front matter (used when mcp_mode=global)."""
+    p = AGENTS_DIR / f"{agent}.agent.md"
+    if not p.exists():
+        from .config import ASSETS
+        p = ASSETS / "agents" / f"{agent}.agent.md"
+    text = p.read_text(encoding="utf-8")
+    if text.startswith("---"):
+        text = text.split("---", 2)[2]
+    return text.strip()
+
+
 def write_mcp_config() -> Path:
     exe = Path(sys.executable).with_name("forge.exe" if sys.platform == "win32" else "forge")
     cfg = {"mcpServers": {"forge-index": {
@@ -102,9 +129,22 @@ def run_agent(cfg: Config, agent: str, prompt: str, cwd: Path, tickets: list[str
         raise BudgetExceeded(f"daily token budget {budget:,} reached")
 
     prof = PROFILES[agent]
-    model = model or cfg.model_for(agent)
-    cmd = [COPILOT_BIN, "--agent", agent, "-p", prompt, "--model", model, "--no-ask-user"]
-    if cfg.mcp_mode in ("agent", "global"):
+    model = model or cfg.model_for("forge-analyst" if agent == "baseline" else agent)
+    exe = copilot_exe()
+    if agent == "baseline":
+        cmd = [exe, "-p", prompt]
+    elif cfg.mcp_mode == "global":
+        # Some CLI versions only expose MCP tools without --agent: pass the agent's instructions as a
+        # prefix file (same bytes every call; a file, because cmd.exe shims mangle multi-line args).
+        prefix = Path(cwd) / ".forge" / "AGENT.md"
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        prefix.write_text(agent_instructions(agent), encoding="utf-8")
+        context_chars += prefix.stat().st_size
+        cmd = [exe, "-p", f"First read .forge/AGENT.md and follow it strictly. Task: {prompt}"]
+    else:
+        cmd = [exe, "--agent", agent, "-p", prompt]
+    cmd += ["--model", model, "--no-ask-user"]
+    if cfg.mcp_mode in ("agent", "global") and agent != "baseline":
         cmd += ["--additional-mcp-config", f"@{mcp_config_path()}"]
     for t in prof["allow"] + (extra_allow or []):
         if t == "forge-index" and cfg.mcp_mode == "off":
@@ -113,7 +153,7 @@ def run_agent(cfg: Config, agent: str, prompt: str, cwd: Path, tickets: list[str
     for t in ALWAYS_DENY + prof["deny"]:
         cmd += ["--deny-tool", t]
 
-    est = (len(prompt) + context_chars) // 4
+    est = (len(cmd[cmd.index("-p") + 1]) + context_chars) // 4
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,

@@ -57,6 +57,60 @@ class Config:
     def threshold(self, key: str, default):
         return (self.team.get("thresholds") or {}).get(key, default)
 
+    @property
+    def me(self) -> dict:
+        return (self.team.get("members") or {}).get(self.user_id) or {}
+
+    @property
+    def db_path(self) -> Path:
+        return HOME / "forge.db"
+
+    def member_by_email(self, email: str) -> str | None:
+        email = (email or "").lower()
+        for uid, m in (self.team.get("members") or {}).items():
+            if (m.get("email") or "").lower() == email:
+                return uid
+        return None
+
+
+REQUIRED_TEAM_KEYS = ("jira", "members", "approvers", "lead", "models", "test")
+REQUIRED_MODELS = ("forge-doctor", "forge-config", "forge-analyst", "forge-fixer", "forge-adapter")
+
+
+def validate_team(team: dict, user_id: str | None = None) -> list[str]:
+    """Problems in team.json that would make a run fail or behave unsafely. Empty list = OK."""
+    if not team:
+        return ["config/team.json is missing or empty"]
+    probs = [f"missing key: {k}" for k in REQUIRED_TEAM_KEYS if k not in team]
+    jira = team.get("jira") or {}
+    if jira.get("mode", "api") == "api":
+        for k in ("base_url", "scope_jql"):
+            if not jira.get(k) or "yourorg.example" in str(jira.get(k)):
+                probs.append(f"jira.{k} is not set")
+    models = team.get("models") or {}
+    for agent in REQUIRED_MODELS:
+        m = models.get(agent, "")
+        if not m or str(m).startswith("REPLACE"):
+            probs.append(f"models.{agent} is a placeholder ({m or 'empty'})")
+    esc = models.get("escalation", "")
+    if esc and str(esc).startswith("REPLACE"):
+        probs.append("models.escalation is a placeholder (remove it to disable escalation)")
+    members = team.get("members") or {}
+    if user_id and user_id not in members:
+        probs.append(f"you ('{user_id}') are not listed in members")
+    for uid, m in members.items():
+        if "@" not in (m.get("email") or ""):
+            probs.append(f"members.{uid}.email is missing")
+    approvers = [a.lower() for a in team.get("approvers") or []]
+    if not approvers:
+        probs.append("approvers is empty: nobody could approve a fix")
+    if team.get("lead") and team["lead"].lower() not in approvers:
+        probs.append("lead is not in approvers")
+    targeted = (team.get("test") or {}).get("targeted", "")
+    if targeted and "{test_path}" not in targeted:
+        probs.append("test.targeted must contain {test_path}")
+    return probs
+
 
 def load() -> Config:
     if not LOCAL_CONFIG.exists():

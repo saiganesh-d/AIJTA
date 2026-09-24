@@ -35,6 +35,8 @@ and point them at the team SharePoint library that holds `AI-Forge-Shared`.
 4. **Delete file** (SharePoint): the outbox item.
 
 Notes:
+- `kind` is one of `approval`, `info` (also used for rule-detected duplicates), `conflict`, `notify`.
+  Messages not tied to a ticket (daily budget reached, runner alerts) use the ticket key `FORGE-0`.
 - The responder comes from Teams identity, not from card input. Runners also check it against `approvers`.
 - A waiting run can stay open for a long time, but not forever (flow run duration limits apply).
   Runners re-post stale approvals, and a late click on an old card is ignored because its `request_id` is no longer pending.
@@ -42,8 +44,9 @@ Notes:
 
 ## Flow 2 – "AI Forge: weekly digest" (optional)
 Trigger: *Recurrence* (Friday 16:00) → SharePoint *List folder* `runners/` → loop: *Get file content*
-→ *Parse JSON* → append to an array → *Create HTML table* → Teams *Post message* with totals:
+→ *Parse JSON* → append `counts.week` to an array → *Create HTML table* → Teams *Post message* with totals:
 tickets analyzed, grouped, info-only, duplicates, PRs, rejected, and tokens per person.
+For the full picture (hours saved, calls avoided), the lead runs `forge report --team` and attaches the HTML.
 
 ## Flow 3 – "AI Forge: stale runner alert" (optional)
 Same as flow 2, daily at 10:00. Post an alert when `last_run` is older than 1 working day.

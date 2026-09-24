@@ -8,7 +8,10 @@ python3 -c 'import sys; assert sys.version_info >= (3,11)' || { echo "Python 3.1
 mkdir -p "$FORGE_HOME"
 [ -d "$FORGE_HOME/venv" ] || python3 -m venv "$FORGE_HOME/venv"
 "$FORGE_HOME/venv/bin/pip" install --quiet --upgrade pip
-"$FORGE_HOME/venv/bin/pip" install --quiet "$HERE"
+# build from a local copy so pip never writes build/ or *.egg-info into the synced shared folder
+rm -rf "$FORGE_HOME/tool-src" && cp -R "$HERE" "$FORGE_HOME/tool-src"
+rm -rf "$FORGE_HOME/tool-src/build" "$FORGE_HOME"/tool-src/*.egg-info
+"$FORGE_HOME/venv/bin/pip" install --quiet "$FORGE_HOME/tool-src"
 cp "$HERE/VERSION" "$FORGE_HOME/installed_version"
 "$FORGE_HOME/venv/bin/forge" setup
 echo "Done. Try: forge doctor --live"
