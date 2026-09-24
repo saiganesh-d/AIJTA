@@ -325,3 +325,18 @@ def test_read_only_jira_sends_questions_to_teams(env):
     assert not (env.shared / "jira-export" / "comments.log").exists()  # nothing written to Jira
     msg = next(m for m in env.outbox().values() if m["kind"] == "notify")
     assert "SUP-3 needs more information" in msg["text"] and "steps to reproduce" in msg["text"]
+
+
+def test_assigned_to_me_false_takes_all_scope_tickets(env):
+    cfg = _cfg(env, assigned_to_me=False, support_issue_types=[])
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.params["jql"])
+        return httpx.Response(200, json={"issues": [_issue("ABC-1", desc=TRACE)], "total": 1})
+
+    st = Store(env.home / "t.db")
+    sync(cfg, st, Jira(cfg, "tok", transport=httpx.MockTransport(handler)), log=lambda *_: None)
+    assert "currentUser" not in seen[0] and st.ticket("ABC-1")
+    idx = Index(env.cfg.index_db, env.cfg.repo_path)
+    assert triage.route(cfg, idx, {**ticket("ABC-1", "x", TRACE), "type": "Story"}, [])[0] == "ready"  # no type filter

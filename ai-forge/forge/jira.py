@@ -169,6 +169,7 @@ class FileJira:
         j = cfg.team.get("jira") or {}
         self.dir = Path(j.get("path") or cfg.shared / "jira-export")
         self.me = cfg.user_email.lower()
+        self.only_mine = j.get("assigned_to_me", True)
         self.requests = 0
         self.comments: list[tuple[str, str]] = []
         self.cloud = False
@@ -186,7 +187,7 @@ class FileJira:
     # so file mode ignores `since`; unchanged tickets are skipped by the `updated` check.
     def mine(self, since: str) -> list[dict]:
         self.requests += 1
-        return [t for t in self._all() if (t.get("assignee") or "").lower() == self.me]
+        return [t for t in self._all() if not self.only_mine or (t.get("assignee") or "").lower() == self.me]
 
     def team(self, since: str) -> list[dict]:
         self.requests += 1
@@ -262,7 +263,9 @@ def sync(cfg: C.Config, store, jira, log=print) -> dict:
     if isinstance(jira, FileJira):
         issues = [jira.normalize(i) for i in jira.mine(last)]
     else:
-        jql = f"({scope}) AND assignee = currentUser()" + (f' AND updated >= "{jql_time(last)}"' if last else "")
+        # assigned_to_me: false → every ticket matching scope_jql (e.g. a trial on a project's open tickets)
+        mine = " AND assignee = currentUser()" if (cfg.team.get("jira") or {}).get("assigned_to_me", True) else ""
+        jql = f"({scope}){mine}" + (f' AND updated >= "{jql_time(last)}"' if last else "")
         issues = [jira.normalize(i) for i in jira.search(jql + " ORDER BY updated ASC")]
     for t in issues:
         old = store.ticket(t["key"])

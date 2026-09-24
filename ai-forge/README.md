@@ -45,6 +45,18 @@ Every step that can be done without Copilot is done without it; see `PLAN.md` §
 | Delivery | **Local only** (`delivery.push: false`): an approved fix becomes a verified commit on the local branch `forge/<KEY>`; the engineer reviews and pushes it. Teams gets the branch, commit and a ready PR description (`.forge/PR_BODY.md`). Merges are detected with plain git, squash merges included |
 | Security sign-off | Pending: confirm Copilot CLI use on this repo and the SharePoint folder with IT before the pilot |
 
+## Trial on normal open tickets (no support tickets yet)
+In `team.json → jira`:
+```json
+"scope_jql": "project = ABC AND statusCategory != Done AND issuetype = Bug AND updated >= -30d",
+"support_issue_types": [],
+"support_labels": [],
+"assigned_to_me": false
+```
+Empty type/label lists switch off the "not a support ticket" skip rule; `assigned_to_me: false` takes every
+ticket matching `scope_jql`, not only yours. Keep the JQL narrow: each analysed ticket costs Copilot tokens
+(the daily `daily_token_budget` stops it at the limit).
+
 ## Demo without Jira access
 Set `"jira": {"mode": "file", "path": "<folder>"}` in `team.json` and drop ticket JSON files into that folder
 (samples in `examples/jira-export/`). Comments go to `comments.log` instead of Jira.
