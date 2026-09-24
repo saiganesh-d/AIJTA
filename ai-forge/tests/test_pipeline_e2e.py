@@ -194,3 +194,39 @@ def test_reporter_update_reenters_needs_info(env):
     env.script(**{"forge-analyst": [{"json": {**ANALYSIS, "groups": [{**ANALYSIS["groups"][0], "tickets": ["SUP-3"]}]}}]})
     pipeline.run_once(force=True)
     assert st.ticket("SUP-3")["status"] == "awaiting_decision"
+
+
+def test_local_only_delivery_without_github_cli(env, monkeypatch):
+    from forge import gitwt
+    """Default delivery: verified commit on the local branch, nothing pushed, no gh needed.
+    A human pushes/merges it; Forge detects the merge with plain git (squash of one commit included)."""
+    team = json.loads((env.shared / "config" / "team.json").read_text())
+    team.pop("delivery")
+    (env.shared / "config" / "team.json").write_text(json.dumps(team))
+    monkeypatch.setattr(gitwt, "GH_BIN", "gh-not-installed")  # no GitHub CLI on this laptop
+    env.add_ticket(ticket("SUP-1", "Order import crashes", TRACE))
+    env.script(**{"forge-analyst": [{"json": {**ANALYSIS, "groups": [{**ANALYSIS["groups"][0], "tickets": ["SUP-1"]}]}}],
+                  "forge-fixer": [FIXER]})
+    pipeline.run_once(force=True)
+    rid = next(m for m in env.outbox().values() if m["kind"] == "approval")["request_id"]
+    decide(env, "SUP-1", rid, "approve")
+    res = pipeline.run_once(force=True)
+    assert res["errors"] == {}, res
+    st = Store(env.cfg.db_path)
+    t = st.ticket("SUP-1")
+    assert t["status"] == "fix_ready" and t["pr_url"] is None
+    assert git(env.repo, "rev-parse", "--verify", "forge/SUP-1")  # local branch exists
+    assert git(env.origin, "branch", "--list", "forge/SUP-1") == ""  # nothing pushed
+    msg = next(m["text"] for m in env.outbox().values() if "Fix ready" in m.get("text", ""))
+    assert "git push -u origin forge/SUP-1" in msg and "fails before / passes after ✅" in msg
+    wt = env.cfg.worktree_root / "fix-SUP-1"
+    assert "Fails without the fix: yes" in (wt / ".forge" / "PR_BODY.md").read_text()
+
+    # the engineer squash-merges it into main by hand
+    git(env.repo, "checkout", "-q", "main")
+    git(env.repo, "merge", "-q", "--squash", "forge/SUP-1")
+    git(env.repo, "commit", "-qm", "SUP-1: accept comma decimals (squashed)")
+    git(env.repo, "push", "-q", "origin", "main")
+    pipeline.run_once(force=True)
+    assert st.ticket("SUP-1")["status"] == "merged"
+    assert json.loads((env.shared / "inflight" / "SUP-1.json").read_text())["status"] == "merged"

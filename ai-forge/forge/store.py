@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS events(ts TEXT, key TEXT, event TEXT, detail TEXT);
 CREATE INDEX IF NOT EXISTS ix_events_event ON events(event);
 """
 
-STATUSES = {"new", "cooling", "ready", "analyzing", "awaiting_decision", "approved", "fixing", "pr_open", "merged",
+STATUSES = {"new", "cooling", "ready", "analyzing", "awaiting_decision", "approved", "fixing", "fix_ready", "pr_open", "merged",
             "skipped", "duplicate", "needs_info", "info_sent", "resolved", "rejected", "fix_failed",
             "plan_invalid", "analyze_failed", "conflict_wait"}
 # Terminal states can only be left by a new Jira update (sync) or an explicit decision.

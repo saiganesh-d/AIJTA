@@ -73,6 +73,10 @@
     "full": "pytest -q",
     "targeted": "pytest -q {test_path}"
   },
+  "delivery": {
+    "push": false,
+    "pull_request": false
+  },
   "work_hours": {
     "start": "09:00",
     "end": "20:00",

@@ -10,7 +10,6 @@ function Need($cmd, $hint) {
 $missing = $false
 Need "python" "Install Python 3.11+ (Company Portal or python.org), tick 'Add to PATH'"
 Need "git" "Install Git for Windows"
-Need "gh" "Install GitHub CLI, then run: gh auth login"
 Need "copilot" "Install Node 22+, then: npm install -g @github/copilot ; run 'copilot' once and log in"
 if ($missing) { exit 1 }
 

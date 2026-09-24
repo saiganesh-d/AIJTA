@@ -17,9 +17,16 @@ COPILOT_BIN = os.environ.get("AI_FORGE_COPILOT_BIN", "copilot")
 AGENTS_DIR = Path.home() / ".copilot" / "agents"
 
 
-def copilot_exe() -> str:
-    """Resolve the CLI once (on Windows npm installs a copilot.cmd shim that subprocess can't find by name)."""
-    return shutil.which(COPILOT_BIN) or COPILOT_BIN
+def tool_cmd(name: str) -> list[str]:
+    """argv prefix for an external CLI. A `.py` path runs with this Python (test doubles, any OS);
+    otherwise resolve it (on Windows npm installs a copilot.cmd shim subprocess can't find by name)."""
+    if name.endswith(".py"):
+        return [sys.executable, name]
+    return [shutil.which(name) or name]
+
+
+def copilot_cmd() -> list[str]:
+    return tool_cmd(COPILOT_BIN)
 
 # Permissions per agent. Deny always wins over allow in Copilot CLI.
 ALWAYS_DENY = ["shell(git push)", "shell(git commit)", "shell(git rebase)", "shell(git reset)", "shell(rm)",
@@ -130,9 +137,9 @@ def run_agent(cfg: Config, agent: str, prompt: str, cwd: Path, tickets: list[str
 
     prof = PROFILES[agent]
     model = model or cfg.model_for("forge-analyst" if agent == "baseline" else agent)
-    exe = copilot_exe()
+    exe = copilot_cmd()
     if agent == "baseline":
-        cmd = [exe, "-p", prompt]
+        cmd = [*exe, "-p", prompt]
     elif cfg.mcp_mode == "global":
         # Some CLI versions only expose MCP tools without --agent: pass the agent's instructions as a
         # prefix file (same bytes every call; a file, because cmd.exe shims mangle multi-line args).
@@ -140,9 +147,9 @@ def run_agent(cfg: Config, agent: str, prompt: str, cwd: Path, tickets: list[str
         prefix.parent.mkdir(parents=True, exist_ok=True)
         prefix.write_text(agent_instructions(agent), encoding="utf-8")
         context_chars += prefix.stat().st_size
-        cmd = [exe, "-p", f"First read .forge/AGENT.md and follow it strictly. Task: {prompt}"]
+        cmd = [*exe, "-p", f"First read .forge/AGENT.md and follow it strictly. Task: {prompt}"]
     else:
-        cmd = [exe, "--agent", agent, "-p", prompt]
+        cmd = [*exe, "--agent", agent, "-p", prompt]
     if model != "auto":  # "auto" = let Copilot choose the model (Copilot auto model selection)
         cmd += ["--model", model]
     cmd += ["--no-ask-user"]

@@ -6,7 +6,8 @@ from pathlib import Path
 import httpx
 
 from . import config as C
-from .copilot import copilot_exe, mcp_config_path
+from .copilot import copilot_cmd, mcp_config_path
+from .gitwt import gh_cmd
 from .index.store import Index
 
 
@@ -28,7 +29,7 @@ def live_mcp_test(cfg: C.Config) -> str:
     idx = Index(cfg.index_db, cfg.repo_path)
     expected = f"forge-index-ok:{idx.meta('commit')[:10]}"
     model = cfg.model_for("forge-doctor")
-    base = [copilot_exe(), "-p", "Call the forge-index ping tool and reply with its exact output only.",
+    base = [*copilot_cmd(), "-p", "Call the forge-index ping tool and reply with its exact output only.",
             *(["--model", model] if model != "auto" else []), "--no-ask-user",
             "--additional-mcp-config", f"@{mcp_config_path()}",
             "--allow-tool", "forge-index", "--deny-tool", "write", "--deny-tool", "shell"]
@@ -42,14 +43,21 @@ def live_mcp_test(cfg: C.Config) -> str:
 def run(live: bool = False) -> None:
     ok = True
     ok &= _check("git", shutil.which("git") is not None, "install Git for Windows")
-    ok &= _check("gh (GitHub CLI) logged in", _cmd_ok("gh", "auth", "status"), "gh auth login")
-    ok &= _check("copilot CLI installed", _cmd_ok(copilot_exe(), "--version"), "npm install -g @github/copilot, then run `copilot` once to log in")
+
+    ok &= _check("copilot CLI installed", _cmd_ok(*copilot_cmd(), "--version"), "npm install -g @github/copilot, then run `copilot` once to log in")
     try:
         cfg = C.load()
     except SystemExit as e:
         _check("forge config", False, str(e))
         return
     ok &= _check("shared folder reachable", cfg.shared.is_dir(), "sync the SharePoint library")
+    from .gitwt import delivery
+    d = cfg.team.get("delivery") or {}
+    if d.get("pull_request"):  # GitHub CLI is only needed when Forge opens PRs itself
+        ok &= _check("gh (GitHub CLI) logged in", _cmd_ok(*gh_cmd(), "auth", "status"),
+                     "install GitHub CLI + gh auth login, or set delivery.pull_request to false")
+    mode = delivery(cfg)
+    print(f"  delivery: {'draft PR' if mode['pull_request'] else 'push branch' if mode['push'] else 'local branch only (you push)'}")
     ok &= _check("team.json present", bool(cfg.team), "team lead must create config/team.json")
     problems = C.validate_team(cfg.team, cfg.user_id)
     ok &= _check("team.json valid", not problems, "; ".join(problems[:6]))

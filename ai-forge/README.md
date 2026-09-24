@@ -4,8 +4,8 @@ Jira support tickets → local triage and code index → GitHub Copilot CLI agen
 Runs on each engineer's laptop with their own Copilot login. No server, no open ports.
 
 ## Install (each teammate, once)
-1. Make sure you have Python 3.11+, Git, GitHub CLI (`gh auth login`), and Copilot CLI
-   (`npm install -g @github/copilot`, then run `copilot` once and log in).
+1. Make sure you have Python 3.11+, Git and Copilot CLI (`npm install -g @github/copilot`, then run
+   `copilot` once and log in). The GitHub CLI is **not** needed (only if you later turn on `delivery.pull_request`).
 2. Sync the team SharePoint library so `AI-Forge-Shared` appears in File Explorer, and set it to
    **Always keep on this device**.
 3. Run:
@@ -42,15 +42,23 @@ Every step that can be done without Copilot is done without it; see `PLAN.md` §
 | Jira writes | **Read-only** (`post_comments: false`): Forge never writes to Jira. Questions for the reporter arrive in Teams for the assignee to forward |
 | Models | `"auto"` for every agent: Copilot picks the model and no `--model` flag is passed. Escalation is off while it is `auto` |
 | Savings minutes | Defaults in `team.json → savings`, still to be confirmed with the lead |
+| Delivery | **Local only** (`delivery.push: false`): an approved fix becomes a verified commit on the local branch `forge/<KEY>`; the engineer reviews and pushes it. Teams gets the branch, commit and a ready PR description (`.forge/PR_BODY.md`). Merges are detected with plain git, squash merges included |
 | Security sign-off | Pending: confirm Copilot CLI use on this repo and the SharePoint folder with IT before the pilot |
 
 ## Demo without Jira access
 Set `"jira": {"mode": "file", "path": "<folder>"}` in `team.json` and drop ticket JSON files into that folder
 (samples in `examples/jira-export/`). Comments go to `comments.log` instead of Jira.
 
-## Tests
-`pip install -e . pytest && pytest -q`: runs the whole pipeline against a throwaway git repo with fake
-`copilot` and `gh` executables (Linux/macOS; no network, no Copilot usage).
+## Check that it works (from cmd, no CI and no GitHub needed)
+```
+cd ai-forge
+python -m venv .venv && .venv\Scripts\activate      (macOS/Linux: source .venv/bin/activate)
+pip install -e . pytest
+python -m pytest -q
+```
+This runs the whole pipeline (Jira → rules → grouping → cards → approval → fix with fails-before/passes-after
+check → local branch → merge detection, plus conflicts and revalidation) against a throwaway git repo, with
+stand-ins for Copilot and GitHub. No network, no Copilot usage, no tokens.
 
 ## Team lead, first time
 1. Create `AI-Forge-Shared` in the team SharePoint library and copy this repo into `AI-Forge-Shared/tool/`.

@@ -51,7 +51,7 @@ def detect(cfg: C.Config, idx: Index, key: str, my_symbols: list[str], my_files:
         direct = mine & theirs
         if direct:
             out.append({**base, "kind": "direct", "symbols": sorted(direct),
-                        "recommendation": "wait" if f.get("status") == "pr_open" else "build_on",
+                        "recommendation": "wait" if f.get("status") in OPEN_FIX else "build_on",
                         "note": f"Both change {', '.join(sorted(_short(s) for s in direct))}."})
             continue
         dep = (idx.impact([_short(s) for s in theirs]) & mine) | (idx.impact([_short(s) for s in mine]) & theirs)
@@ -73,7 +73,7 @@ def lines(conflicts: list[dict]) -> list[str]:
 
 # ---------------- merge watch ----------------
 def _gh_pr_state(url: str, cwd: str) -> dict:
-    r = subprocess.run(["gh", "pr", "view", url, "--json", "state,mergeCommit"], cwd=cwd, capture_output=True,
+    r = subprocess.run([*gitwt.gh_cmd(), "pr", "view", url, "--json", "state,mergeCommit"], cwd=cwd, capture_output=True,
                        text=True, errors="replace", timeout=60)
     if r.returncode != 0:
         return {}
@@ -87,13 +87,29 @@ def fix_worktree(cfg: C.Config, key: str) -> Path:
     return cfg.worktree_root / f"fix-{key}"
 
 
+OPEN_FIX = ("fix_ready", "pr_open")  # verified fix on a branch / draft PR, waiting for a human to merge
+
+
+def _merge_state(cfg: C.Config, t: dict) -> dict:
+    """MERGED/CLOSED from GitHub when there is a PR and the GitHub CLI; otherwise plain git."""
+    if t.get("pr_url") and gitwt.gh_available():
+        st = _gh_pr_state(t["pr_url"], cfg.repo_path)
+        if st.get("state") in ("MERGED", "CLOSED"):
+            return st
+    branch = t.get("branch")
+    if branch and gitwt.git(cfg.repo_path, "rev-parse", "-q", "--verify", branch, check=False).returncode == 0 \
+            and gitwt.merged_into(cfg.repo_path, cfg.base_ref, branch):
+        sha = gitwt.git(cfg.repo_path, "log", "-n", "1", "--format=%H", cfg.base_ref, "-E",
+                        f"--grep=(^|[^A-Za-z0-9-]){t['key']}([^0-9]|$)", check=False).stdout.strip()
+        return {"state": "MERGED", "mergeCommit": {"oid": sha or gitwt.out(cfg.repo_path, "rev-parse", branch)}}
+    return {}
+
+
 def watch(cfg: C.Config, store, idx: Index, log=print) -> dict:
     stats = {"merged": 0, "closed": 0, "unblocked": 0, "revalidated": 0, "adapted": 0, "needs_human": 0}
-    # 1) my own PRs: merged or closed?
-    for t in store.tickets("pr_open"):
-        if not t.get("pr_url"):
-            continue
-        st = _gh_pr_state(t["pr_url"], cfg.repo_path)
+    # 1) my open fixes: merged (GitHub or git) or PR closed?
+    for t in store.tickets(*OPEN_FIX):
+        st = _merge_state(cfg, t)
         if st.get("state") == "MERGED":
             sha = (st.get("mergeCommit") or {}).get("oid")
             store.set_status(t["key"], "merged", f"PR merged {sha or ''}")
@@ -118,8 +134,8 @@ def watch(cfg: C.Config, store, idx: Index, log=print) -> dict:
             store.set_status(t["key"], "approved", f"{other} merged/abandoned, continuing", blocked_on=f"ack:{other}")
             stats["unblocked"] += 1
 
-    # 3) revalidate my open PRs after overlapping teammate merges
-    for t in store.tickets("pr_open"):
+    # 3) revalidate my open fixes after overlapping teammate merges
+    for t in store.tickets(*OPEN_FIX):
         wt = fix_worktree(cfg, t["key"])
         if not wt.exists():
             continue
@@ -141,6 +157,12 @@ def watch(cfg: C.Config, store, idx: Index, log=print) -> dict:
     return stats
 
 
+def _push_if_pushed(cfg: C.Config, wt: Path, key: str) -> None:
+    """Update the remote branch only if Forge pushed it in the first place (delivery.push)."""
+    if (read_json(cfg.shared / "inflight" / f"{key}.json") or {}).get("pushed"):
+        gitwt.push(cfg, wt, "origin", "HEAD")
+
+
 def revalidate(cfg: C.Config, store, idx: Index, t: dict, wt: Path, other: str, f: dict, log=print) -> str:
     key = t["key"]
     orig_head = gitwt.out(wt, "rev-parse", "HEAD")
@@ -151,7 +173,7 @@ def revalidate(cfg: C.Config, store, idx: Index, t: dict, wt: Path, other: str, 
     if r.returncode == 0:
         rc, output = gitwt.run_cmd(full, wt) if full else (0, "")
         if rc == 0:
-            gitwt.git(wt, "push", "--force-with-lease", "origin", "HEAD", check=False)
+            _push_if_pushed(cfg, wt, key)
             notify(cfg, store, key, f"{key} is still valid after {other} was merged ✅ (rebased, tests pass)")
             log(f"revalidate {key} vs {other}: clean")
             return "revalidated"
@@ -187,7 +209,7 @@ def revalidate(cfg: C.Config, store, idx: Index, t: dict, wt: Path, other: str, 
     if status == "adapted":
         rc, output = gitwt.run_cmd(full, wt) if full else (0, "")
         if rc == 0:
-            gitwt.git(wt, "push", "--force-with-lease", "origin", "HEAD", check=False)
+            _push_if_pushed(cfg, wt, key)
             notify(cfg, store, key, f"{key} adapted to {other} and still valid ✅. Reviewer check: {out.get('risk_note', '-')}")
             log(f"revalidate {key} vs {other}: adapted")
             return "adapted"

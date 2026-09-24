@@ -381,6 +381,10 @@ call-graph neighbours → search hits → config matches → past matches, teamm
 - Jira Cloud, REST v3; **read-only** (`post_comments: false`). Needs-info questions go to the assignee in Teams.
 - Models: `"auto"` everywhere (no `--model` flag). Trade-off: the cheap-model routing lever of §3 is left to
   Copilot, and escalation (§5.11 step 6) is disabled. Set explicit ids per agent later if the ledger shows it pays off.
+- Delivery: **local only** by default (`delivery.push: false`, no GitHub CLI, no CI). A fix ends as a verified
+  commit on `forge/<KEY>` (status `fix_ready`); the engineer pushes it. `delivery.push` / `delivery.pull_request`
+  turn §5.14 step 7 back on later. Merge detection without GitHub: `git cherry <base_ref> forge/<KEY>`.
+- Checks run from the command line (`python -m pytest -q`); the GitHub Actions workflow was removed.
 - Savings assumptions: defaults until the lead confirms them. Security sign-off (§5.17): pending.
 
 ## 10. Next steps (suggested)

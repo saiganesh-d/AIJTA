@@ -1,8 +1,11 @@
 """Git plumbing shared by analysis, fixer and revalidation: worktrees, test runs, diff → symbols."""
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
+
+GH_BIN = os.environ.get("AI_FORGE_GH_BIN", "gh")  # GitHub CLI: optional, only for delivery.pull_request
 
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec|specs)/|(^|/)test_[^/]+$|_test\.\w+$|\.(test|spec)\.\w+$|Tests?\.\w+$")
 
@@ -98,6 +101,37 @@ def changed_symbols(idx, wt, base: str) -> list[str]:
                 if key not in syms:
                     syms.append(key)
     return syms
+
+
+def gh_cmd() -> list[str]:
+    from .copilot import tool_cmd
+    return tool_cmd(GH_BIN)
+
+
+def gh_available() -> bool:
+    return GH_BIN.endswith(".py") and Path(GH_BIN).exists() or bool(shutil.which(GH_BIN))
+
+
+def delivery(cfg) -> dict:
+    """team.json → delivery. Default: local only (verified commit on forge/<KEY>, a human pushes it).
+    push: true → push the branch; pull_request: true (needs push + GitHub CLI) → open a draft PR."""
+    d = cfg.team.get("delivery") or {}
+    push = bool(d.get("push", False))
+    return {"push": push, "pull_request": push and bool(d.get("pull_request", False)) and gh_available()}
+
+
+def push(cfg, wt, *args) -> subprocess.CompletedProcess | None:
+    """Push only when the team enabled it; None = pushing is off (local-only mode)."""
+    if not delivery(cfg)["push"]:
+        return None
+    return git(wt, "push", "--force-with-lease", *args, check=False)
+
+
+def merged_into(repo: str, base_ref: str, branch: str) -> bool:
+    """Every commit of `branch` is in base_ref (merge, fast-forward, rebase, or a squash of one commit).
+    `git cherry` marks commits whose patch already exists upstream with '-'."""
+    r = git(repo, "cherry", base_ref, branch, check=False)
+    return r.returncode == 0 and all(l.startswith("-") for l in r.stdout.splitlines())
 
 
 def branch_name(base_ref: str) -> str:

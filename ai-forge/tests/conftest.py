@@ -1,8 +1,6 @@
 """Test harness: an isolated AI_FORGE_HOME, a real git repo with a bare 'origin', a shared folder,
 file-mode Jira, and fake copilot/gh executables on PATH. No network, no real Copilot calls."""
 import json
-import os
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from forge import config as C
-from forge import copilot, setup_wizard, shared
+from forge import copilot, gitwt, setup_wizard, shared
 
 HERE = Path(__file__).parent
 
@@ -56,13 +54,6 @@ def make_repo(tmp: Path) -> tuple[Path, Path]:
     return repo, origin
 
 
-def _exe(bin_dir: Path, name: str, script: Path) -> Path:
-    p = bin_dir / name
-    p.write_text(f"#!{sys.executable}\nimport runpy\nrunpy.run_path({str(script)!r}, run_name='__main__')\n")
-    p.chmod(p.stat().st_mode | stat.S_IEXEC)
-    return p
-
-
 def ticket(key, summary, description, **kw) -> dict:
     return {"key": key, "summary": summary, "description": description, "type": kw.pop("type", "Bug"),
             "assignee": kw.pop("assignee", "sai@x.test"), "updated": kw.pop("updated", "2026-09-24T10:00:00.000+0000"),
@@ -97,11 +88,8 @@ def env(tmp_path, monkeypatch):
     sh = tmp_path / "shared"
     shared.ensure_layout(sh)
     (sh / "jira-export").mkdir()
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    monkeypatch.setattr(copilot, "COPILOT_BIN", str(_exe(bin_dir, "copilot", HERE / "fake_copilot.py")))
-    _exe(bin_dir, "gh", HERE / "fake_gh.py")
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(copilot, "COPILOT_BIN", str(HERE / "fake_copilot.py"))
+    monkeypatch.setattr(gitwt, "GH_BIN", str(HERE / "fake_gh.py"))
     scenario = tmp_path / "scenario.json"
     scenario.write_text("{}")
     monkeypatch.setenv("FAKE_COPILOT_SCENARIO", str(scenario))
@@ -117,8 +105,10 @@ def env(tmp_path, monkeypatch):
     team["models"] = {k: "test-model" for k in team["models"]}
     team["models"]["escalation"] = "strong-model"
     team["thresholds"]["new_ticket_cooldown_minutes"] = 0
-    team["test"] = {"full": f"{sys.executable} -m pytest -q -p no:cacheprovider",
-                    "targeted": f"{sys.executable} -m pytest -q -p no:cacheprovider {{test_path}}"}
+    team["delivery"] = {"push": True, "pull_request": True}  # tests of the local-only default switch this off
+    py = f'"{sys.executable}"'  # quoted: Windows paths often contain spaces
+    team["test"] = {"full": f"{py} -m pytest -q -p no:cacheprovider",
+                    "targeted": f"{py} -m pytest -q -p no:cacheprovider {{test_path}}"}
     (sh / "config" / "team.json").write_text(json.dumps(team))
     cfg = C.Config(user_id="sai", user_email="sai@x.test", repo_path=str(repo), shared_dir=str(sh), mcp_mode="off")
     C.save(cfg)

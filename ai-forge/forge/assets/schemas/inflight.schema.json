@@ -7,13 +7,14 @@
     "schema": {"const": 1},
     "ticket_key": {"type": "string"},
     "owner": {"type": "string"},
-    "status": {"enum": ["planned", "fixing", "pr_open", "merged", "abandoned"]},
+    "status": {"enum": ["planned", "fixing", "fix_ready", "pr_open", "merged", "abandoned"]},
     "branch": {"type": ["string", "null"]},
     "base_commit": {"type": "string"},
     "planned_symbols": {"type": "array", "items": {"type": "string"}},
     "changed_files": {"type": "array", "items": {"type": "string"}},
     "changed_symbols": {"type": "array", "items": {"type": "string"}},
     "pr_url": {"type": ["string", "null"]},
+    "pushed": {"type": "boolean", "description": "false = the fix exists only on the owner's local branch"},
     "merge_commit": {"type": ["string", "null"]},
     "updated": {"type": "string"}
   }
