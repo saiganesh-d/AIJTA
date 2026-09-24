@@ -85,7 +85,7 @@ def validate_team(team: dict, user_id: str | None = None) -> list[str]:
     jira = team.get("jira") or {}
     if jira.get("mode", "api") == "api":
         for k in ("base_url", "scope_jql"):
-            if not jira.get(k) or "yourorg.example" in str(jira.get(k)):
+            if not jira.get(k) or "yourorg" in str(jira.get(k)):
                 probs.append(f"jira.{k} is not set")
     models = team.get("models") or {}
     for agent in REQUIRED_MODELS:
@@ -94,7 +94,7 @@ def validate_team(team: dict, user_id: str | None = None) -> list[str]:
             probs.append(f"models.{agent} is a placeholder ({m or 'empty'})")
     esc = models.get("escalation", "")
     if esc and str(esc).startswith("REPLACE"):
-        probs.append("models.escalation is a placeholder (remove it to disable escalation)")
+        probs.append("models.escalation is a placeholder (remove it or set \"auto\" to disable escalation)")
     members = team.get("members") or {}
     if user_id and user_id not in members:
         probs.append(f"you ('{user_id}') are not listed in members")

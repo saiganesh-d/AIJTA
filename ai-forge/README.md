@@ -35,6 +35,15 @@ group related tickets → one Copilot call per group → cards → merge watch a
 approved fixes (test must fail before and pass after) → draft PR → heartbeat.
 Every step that can be done without Copilot is done without it; see `PLAN.md` §3.
 
+## Team decisions (pilot)
+| Topic | Setting |
+|---|---|
+| Jira | Cloud, REST v3 (`api_version: "3"`): basic auth with your email + an API token from id.atlassian.com, kept in the OS keychain |
+| Jira writes | **Read-only** (`post_comments: false`): Forge never writes to Jira. Questions for the reporter arrive in Teams for the assignee to forward |
+| Models | `"auto"` for every agent: Copilot picks the model and no `--model` flag is passed. Escalation is off while it is `auto` |
+| Savings minutes | Defaults in `team.json → savings`, still to be confirmed with the lead |
+| Security sign-off | Pending: confirm Copilot CLI use on this repo and the SharePoint folder with IT before the pilot |
+
 ## Demo without Jira access
 Set `"jira": {"mode": "file", "path": "<folder>"}` in `team.json` and drop ticket JSON files into that folder
 (samples in `examples/jira-export/`). Comments go to `comments.log` instead of Jira.

@@ -143,7 +143,9 @@ def run_agent(cfg: Config, agent: str, prompt: str, cwd: Path, tickets: list[str
         cmd = [exe, "-p", f"First read .forge/AGENT.md and follow it strictly. Task: {prompt}"]
     else:
         cmd = [exe, "--agent", agent, "-p", prompt]
-    cmd += ["--model", model, "--no-ask-user"]
+    if model != "auto":  # "auto" = let Copilot choose the model (Copilot auto model selection)
+        cmd += ["--model", model]
+    cmd += ["--no-ask-user"]
     if cfg.mcp_mode in ("agent", "global") and agent != "baseline":
         cmd += ["--additional-mcp-config", f"@{mcp_config_path()}"]
     for t in prof["allow"] + (extra_allow or []):

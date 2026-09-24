@@ -109,7 +109,10 @@ def run() -> None:
 
     file_mode = (cfg.team.get("jira") or {}).get("mode") == "file"
     if not file_mode and (not C.jira_token(email) or _ask("Update Jira token? (y/N)", "n").lower() == "y"):
-        C.set_jira_token(email, getpass.getpass("Jira personal access token (stored in OS keychain): "))
+        cloud = str((cfg.team.get("jira") or {}).get("api_version", "2")) == "3"
+        label = ("Jira API token (create at id.atlassian.com → Security → API tokens)" if cloud
+                 else "Jira personal access token")
+        C.set_jira_token(email, getpass.getpass(f"{label} (stored in OS keychain): "))
 
     print("• MCP config:", write_mcp_config())
     print("• agents updated:", sync_agents(cfg))

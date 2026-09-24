@@ -29,7 +29,8 @@ def live_mcp_test(cfg: C.Config) -> str:
     expected = f"forge-index-ok:{idx.meta('commit')[:10]}"
     model = cfg.model_for("forge-doctor")
     base = [copilot_exe(), "-p", "Call the forge-index ping tool and reply with its exact output only.",
-            "--model", model, "--no-ask-user", "--additional-mcp-config", f"@{mcp_config_path()}",
+            *(["--model", model] if model != "auto" else []), "--no-ask-user",
+            "--additional-mcp-config", f"@{mcp_config_path()}",
             "--allow-tool", "forge-index", "--deny-tool", "write", "--deny-tool", "shell"]
     for mode, extra in (("agent", ["--agent", "forge-doctor"]), ("global", [])):
         r = subprocess.run(base + extra, cwd=str(cfg.worktree_root), capture_output=True, text=True, timeout=300)

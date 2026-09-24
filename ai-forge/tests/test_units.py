@@ -17,6 +17,7 @@ from forge.store import Store
 # ---------------- config ----------------
 def test_validate_team_flags_placeholders():
     team = json.loads((C.ASSETS / "team.example.json").read_text())
+    team["models"]["forge-analyst"] = "REPLACE_WITH_MID_MODEL_ID"
     probs = C.validate_team(team, "nobody")
     assert any("forge-analyst is a placeholder" in p for p in probs)
     assert any("jira.base_url" in p for p in probs)
@@ -306,3 +307,21 @@ def test_unexpected_analysis_error_fails_once(env, monkeypatch):
     st = Store(env.cfg.db_path)
     assert st.ticket("SUP-1")["status"] == "analyze_failed" and env.calls() == []
     assert any("boom" in m.get("text", "") for m in env.outbox().values())
+
+
+def test_auto_model_omits_model_flag(env, tmp_path):
+    env.cfg.team["models"]["forge-analyst"] = "auto"
+    assert C.validate_team(env.cfg.team, "sai") == []
+    env.script(**{"forge-analyst": [{"json": {"ok": 1}}]})
+    copilot.run_agent(env.cfg, "forge-analyst", "x", tmp_path, [])
+    assert "--model" not in env.calls()[-1]["argv"]
+
+
+def test_read_only_jira_sends_questions_to_teams(env):
+    env.cfg.team["jira"]["post_comments"] = False
+    (env.shared / "config" / "team.json").write_text(json.dumps(env.cfg.team))
+    env.add_ticket(ticket("SUP-3", "Broken", "doesn't work"))
+    pipeline.run_once(force=True)
+    assert not (env.shared / "jira-export" / "comments.log").exists()  # nothing written to Jira
+    msg = next(m for m in env.outbox().values() if m["kind"] == "notify")
+    assert "SUP-3 needs more information" in msg["text"] and "steps to reproduce" in msg["text"]

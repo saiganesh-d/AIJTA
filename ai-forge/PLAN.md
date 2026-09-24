@@ -377,6 +377,12 @@ call-graph neighbours → search hits → config matches → past matches, teamm
 | Fix commit lookup skips `Revert "…"` commits | Otherwise the revert itself (which mentions the key) is taken as the fix and a regression is missed. |
 | `forge status` | Where each of my tickets is, and which cards are pending. |
 
+## 9a. Pilot decisions (2026-09-24)
+- Jira Cloud, REST v3; **read-only** (`post_comments: false`). Needs-info questions go to the assignee in Teams.
+- Models: `"auto"` everywhere (no `--model` flag). Trade-off: the cheap-model routing lever of §3 is left to
+  Copilot, and escalation (§5.11 step 6) is disabled. Set explicit ids per agent later if the ledger shows it pays off.
+- Savings assumptions: defaults until the lead confirms them. Security sign-off (§5.17): pending.
+
 ## 10. Next steps (suggested)
 1. Phase 0 on two laptops: `forge doctor --live`, then calibrate `copilot.parse_usage` against the real usage
    tail stored in `ledger.db → calls.raw_tail` (one regex change if the format differs).

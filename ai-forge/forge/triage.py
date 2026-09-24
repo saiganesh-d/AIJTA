@@ -206,6 +206,17 @@ def route(cfg: C.Config, idx: Index, t: dict, matches: list[dict]) -> tuple[str,
     return "ready", "forge-analyst", f"{len(app_frames)} app frames resolved" if app_frames else "default route"
 
 
+def ask_reporter(cfg: C.Config, store, jira, key: str, questions: list[str] | None = None) -> None:
+    """Post the needs-info questions as a Jira comment, or (read-only Jira, `post_comments: false`)
+    send them to the assignee in Teams to forward to the reporter."""
+    text = needs_info_comment(cfg, questions)
+    if (cfg.team.get("jira") or {}).get("post_comments", False):
+        jira.add_comment(key, text)
+    else:
+        from .cards import notify  # local import: cards depends on triage helpers
+        notify(cfg, store, key, f"{key} needs more information from the reporter. Suggested reply:\n{text}")
+
+
 def needs_info_comment(cfg: C.Config, questions: list[str] | None = None) -> str:
     base = (cfg.team.get("jira") or {}).get("needs_info_comment") or DEFAULT_NEEDS_INFO
     if questions:
@@ -229,8 +240,7 @@ def preclassify(cfg: C.Config, store, idx: Index, jira, log=print) -> dict:
         if status != "ready":
             store.event(t["key"], f"rule:{status}", reason)  # handled with zero Copilot calls
         if status == "needs_info":
-            if (cfg.team.get("jira") or {}).get("post_comments", True):
-                jira.add_comment(t["key"], needs_info_comment(cfg))
+            ask_reporter(cfg, store, jira, t["key"])
             store.set_status(t["key"], "needs_info", reason, analyzed_at=datetime.now().isoformat(timespec="seconds"))
         elif status == "duplicate":
             from .cards import send_duplicate  # local import: cards depends on triage helpers

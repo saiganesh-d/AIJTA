@@ -3,8 +3,8 @@
   "tool_version": "0.2.0",
   "jira": {
     "mode": "api",
-    "base_url": "https://jira.yourorg.example",
-    "api_version": "2",
+    "base_url": "https://yourorg.atlassian.net",
+    "api_version": "3",
     "scope_jql": "project = SUP AND statusCategory != Done",
     "support_issue_types": [
       "Support",
@@ -15,9 +15,9 @@
     "support_labels": [
       "support"
     ],
-    "sprint_field": "customfield_10020",
-    "post_comments": true,
-    "verify_tls": true
+    "post_comments": false,
+    "verify_tls": true,
+    "sprint_field": "customfield_10020"
   },
   "base_ref": "origin/main",
   "lead": "lead@yourorg.example",
@@ -52,12 +52,12 @@
     "reports": "priya"
   },
   "models": {
-    "forge-doctor": "REPLACE_WITH_CHEAPEST_MODEL_ID",
-    "forge-config": "REPLACE_WITH_CHEAP_MODEL_ID",
-    "forge-analyst": "REPLACE_WITH_MID_MODEL_ID",
-    "forge-fixer": "REPLACE_WITH_MID_MODEL_ID",
-    "forge-adapter": "REPLACE_WITH_MID_MODEL_ID",
-    "escalation": "REPLACE_WITH_STRONG_MODEL_ID"
+    "forge-doctor": "auto",
+    "forge-config": "auto",
+    "forge-analyst": "auto",
+    "forge-fixer": "auto",
+    "forge-adapter": "auto",
+    "escalation": "auto"
   },
   "thresholds": {
     "dedup_similarity": 0.88,

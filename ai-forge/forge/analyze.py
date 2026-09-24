@@ -107,7 +107,7 @@ def _analyze_one(cfg, store, idx, jira, g, stats, log) -> None:
         # low confidence on an urgent ticket → one rerun on the escalation model
         esc = (cfg.team.get("models") or {}).get("escalation", "")
         urgent = any((t.get("priority") or "").lower() in HIGH_PRIORITIES for t in tickets)
-        if (not err and urgent and esc and not esc.startswith("REPLACE") and agent == "forge-analyst"
+        if (not err and urgent and esc not in ("", "auto") and not esc.startswith("REPLACE") and agent == "forge-analyst"
                 and min(x["confidence"] for x in out["groups"]) < cfg.threshold("escalate_below_confidence", 0.5)):
             log(f"{gid}: low confidence on urgent ticket, rerun on {esc}")
             out2, res2, err2 = _call(cfg, agent, wt, keys, plen, model=esc)
@@ -174,8 +174,7 @@ def _publish(cfg, store, idx, jira, tickets, out, agent, model, tok, matches, lo
             qs = entry.get("questions_for_reporter") or []
             for k in keys:
                 cards.write_analysis(cfg, by_key[k], {**common, "classification": "needs_info", "status": "needs_info"})
-                if (cfg.team.get("jira") or {}).get("post_comments", True):
-                    jira.add_comment(k, triage.needs_info_comment(cfg, qs))
+                triage.ask_reporter(cfg, store, jira, k, qs)
             store.set_status(keys, "needs_info", f"{cls} confidence {conf:.2f}", analyzed_at=now, tokens=share,
                              group_id=gid)
         else:
