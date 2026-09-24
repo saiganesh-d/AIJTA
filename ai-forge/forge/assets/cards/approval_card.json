@@ -1,0 +1,31 @@
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.4",
+  "msteams": {"entities": [{"type": "mention", "text": "<at>${assigneeName}</at>", "mentioned": {"id": "${assigneeEmail}", "name": "${assigneeName}"}}]},
+  "body": [
+    {"type": "TextBlock", "text": "🛠 ${title}", "weight": "Bolder", "size": "Medium", "wrap": true},
+    {"type": "TextBlock", "text": "<at>${assigneeName}</at> · ${ticketLinks}", "wrap": true, "isSubtle": true},
+    {"id": "regression_banner", "type": "Container", "style": "warning", "items": [
+      {"type": "TextBlock", "text": "↩ Possible regression of ${regressionOf}: ${regressionNote}", "wrap": true}]},
+    {"id": "conflict_banner", "type": "Container", "style": "attention", "items": [
+      {"type": "TextBlock", "text": "⚠ ${conflictNote}", "wrap": true}]},
+    {"type": "FactSet", "facts": [
+      {"title": "Type", "value": "${classification}"},
+      {"title": "Risk", "value": "${risk}"},
+      {"title": "Confidence", "value": "${confidence}"},
+      {"title": "Files", "value": "${files}"},
+      {"title": "Cost so far", "value": "${tokens} tokens"}
+    ]},
+    {"type": "TextBlock", "text": "**Root cause**", "wrap": true, "spacing": "Medium"},
+    {"type": "TextBlock", "text": "${rootCause}", "wrap": true},
+    {"type": "TextBlock", "text": "**Proposed fix**", "wrap": true, "spacing": "Medium"},
+    {"type": "TextBlock", "text": "${fixSteps}", "wrap": true},
+    {"type": "Input.Text", "id": "comment", "placeholder": "Optional: note for the fix, or reason for rejecting", "isMultiline": true}
+  ],
+  "actions": [
+    {"type": "Action.Submit", "title": "✅ Approve & fix", "style": "positive", "data": {"action": "approve", "request_id": "${requestId}"}},
+    {"type": "Action.Submit", "title": "❌ Reject", "style": "destructive", "data": {"action": "reject", "request_id": "${requestId}"}},
+    {"type": "Action.OpenUrl", "title": "Open in Jira", "url": "${ticketUrl}"}
+  ]
+}

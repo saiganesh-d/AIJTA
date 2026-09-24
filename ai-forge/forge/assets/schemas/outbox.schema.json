@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "outbox/<TICKET>__<request_id>.json (written by runners, consumed and deleted by Power Automate)",
+  "type": "object",
+  "required": ["schema", "request_id", "ticket_key", "kind", "wait_for_response"],
+  "properties": {
+    "schema": {"const": 1},
+    "request_id": {"type": "string", "pattern": "^[0-9a-f]{8}$"},
+    "ticket_key": {"type": "string"},
+    "kind": {"enum": ["approval", "info", "conflict", "notify"]},
+    "wait_for_response": {"type": "boolean"},
+    "card": {"type": "object", "description": "Full Adaptive Card JSON (for approval/info/conflict)"},
+    "text": {"type": "string", "description": "Plain message (for notify)"}
+  }
+}

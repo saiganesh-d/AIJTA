@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Output of forge-analyst / forge-config (validated before anything is written or posted)",
+  "type": "object",
+  "required": ["groups"],
+  "properties": {
+    "groups": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["tickets", "classification", "root_cause", "confidence"],
+        "properties": {
+          "tickets": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "classification": {"enum": ["code_bug", "configuration", "environment", "data_issue", "user_error", "duplicate", "needs_info"]},
+          "root_cause": {"type": "string"},
+          "evidence": {"type": "array"},
+          "affected_symbols": {"type": "array", "items": {"type": "string"}},
+          "affected_files": {"type": "array", "items": {"type": "string"}},
+          "proposed_fix": {"type": ["object", "null"]},
+          "non_code_resolution": {"type": ["object", "null"]},
+          "regression_of": {"type": ["string", "null"]},
+          "conflicts": {"type": "array"},
+          "risk": {"enum": ["low", "medium", "high"]},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "questions_for_reporter": {"type": "array", "items": {"type": "string"}},
+          "escalate_to_analyst": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

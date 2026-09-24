@@ -1,0 +1,20 @@
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.4",
+  "body": [
+    {"type": "TextBlock", "text": "⚠ ${ticket} overlaps with ${otherTicket} (${otherOwner})", "weight": "Bolder", "size": "Medium", "wrap": true},
+    {"type": "FactSet", "facts": [
+      {"title": "Kind", "value": "${kind}"},
+      {"title": "Shared symbols", "value": "${symbols}"},
+      {"title": "Their status", "value": "${otherStatus}"},
+      {"title": "Suggested", "value": "${recommendation}"}
+    ]},
+    {"type": "TextBlock", "text": "${note}", "wrap": true}
+  ],
+  "actions": [
+    {"type": "Action.Submit", "title": "⏸ Wait for their merge", "data": {"action": "wait", "request_id": "${requestId}"}},
+    {"type": "Action.Submit", "title": "🔗 Build on their branch", "data": {"action": "build_on", "request_id": "${requestId}"}},
+    {"type": "Action.Submit", "title": "▶ Proceed anyway", "data": {"action": "proceed", "request_id": "${requestId}"}}
+  ]
+}

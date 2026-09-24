@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "runners/<user>.json (heartbeat, written by each runner every cycle)",
+  "type": "object",
+  "required": ["schema", "user", "last_run"],
+  "properties": {
+    "schema": {"const": 1},
+    "user": {"type": "string"},
+    "last_run": {"type": "string"},
+    "tool_version": {"type": "string"},
+    "index_commit": {"type": "string"},
+    "mcp_mode": {"enum": ["agent", "global", "off"]},
+    "tokens_today_est": {"type": "integer"},
+    "counts": {"type": "object", "description": "{week: {...}, total: {...}} with analyzed, grouped, info_only, duplicates, skipped_by_rules, needs_info_by_rules, approval_cards, approved, rejected, prs, prs_test_verified, merged, copilot_calls, tokens"},
+    "errors": {"type": "object", "description": "stage name -> error of the last run"}
+  }
+}
