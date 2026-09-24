@@ -1,0 +1,24 @@
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.4",
+  "body": [
+    {"type": "TextBlock", "text": "ℹ ${title}", "weight": "Bolder", "size": "Medium", "wrap": true},
+    {"type": "TextBlock", "text": "${ticketLinks} · not a code change", "wrap": true, "isSubtle": true},
+    {"type": "FactSet", "facts": [
+      {"title": "Type", "value": "${classification}"},
+      {"title": "Where", "value": "${where}"},
+      {"title": "Owner", "value": "${owner}"},
+      {"title": "Confidence", "value": "${confidence}"}
+    ]},
+    {"type": "TextBlock", "text": "**What's going on**", "wrap": true, "spacing": "Medium"},
+    {"type": "TextBlock", "text": "${what}", "wrap": true},
+    {"type": "TextBlock", "text": "**How to resolve**", "wrap": true, "spacing": "Medium"},
+    {"type": "TextBlock", "text": "${steps}", "wrap": true}
+  ],
+  "actions": [
+    {"type": "Action.Submit", "title": "✔ Resolved", "data": {"action": "resolved", "request_id": "${requestId}"}},
+    {"type": "Action.Submit", "title": "It's actually code → analyze", "data": {"action": "analyze_as_code", "request_id": "${requestId}"}},
+    {"type": "Action.OpenUrl", "title": "Open in Jira", "url": "${ticketUrl}"}
+  ]
+}

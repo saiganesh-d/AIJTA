@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "decisions/<TICKET>__<request_id>.json (written ONLY by Power Automate)",
+  "type": "object",
+  "required": ["schema", "ticket_key", "request_id", "action", "responder"],
+  "properties": {
+    "schema": {"const": 1},
+    "ticket_key": {"type": "string"},
+    "request_id": {"type": "string", "pattern": "^[0-9a-f]{8}$"},
+    "action": {"enum": ["approve", "reject", "resolved", "analyze_as_code", "wait", "build_on", "proceed"]},
+    "responder": {"type": "string", "description": "UPN/email from the Teams response, not from card input"},
+    "comment": {"type": "string"},
+    "responded_at": {"type": "string"}
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "tool_version": "0.1.0",
+  "jira": {
+    "base_url": "https://jira.yourorg.example",
+    "api_version": "2",
+    "scope_jql": "project = SUP AND statusCategory != Done",
+    "support_issue_types": ["Support", "Bug", "Incident", "Service Request"]
+  },
+  "base_ref": "origin/main",
+  "lead": "lead@yourorg.example",
+  "approvers": ["lead@yourorg.example", "sai@yourorg.example", "ravi@yourorg.example", "priya@yourorg.example"],
+  "members": {
+    "sai":   {"email": "sai@yourorg.example",   "daily_token_budget": 400000},
+    "ravi":  {"email": "ravi@yourorg.example",  "daily_token_budget": 400000},
+    "priya": {"email": "priya@yourorg.example", "daily_token_budget": 400000}
+  },
+  "components_to_owner": {"billing": "ravi", "reports": "priya"},
+  "models": {
+    "forge-doctor":  "REPLACE_WITH_CHEAPEST_MODEL_ID",
+    "forge-config":  "REPLACE_WITH_CHEAP_MODEL_ID",
+    "forge-analyst": "REPLACE_WITH_MID_MODEL_ID",
+    "forge-fixer":   "REPLACE_WITH_MID_MODEL_ID",
+    "forge-adapter": "REPLACE_WITH_MID_MODEL_ID",
+    "escalation":    "REPLACE_WITH_STRONG_MODEL_ID"
+  },
+  "thresholds": {
+    "dedup_similarity": 0.88,
+    "group_similarity": 0.8,
+    "group_symbol_jaccard": 0.5,
+    "max_group_size": 4,
+    "context_budget_tokens": 7000,
+    "min_confidence_for_fix_card": 0.5,
+    "escalate_below_confidence": 0.5,
+    "new_ticket_cooldown_minutes": 10
+  },
+  "test": {
+    "full": "pytest -q",
+    "targeted": "pytest -q {test_path}"
+  },
+  "work_hours": {"start": "09:00", "end": "20:00", "days": [1, 2, 3, 4, 5]},
+  "teams": {"channel_hint": "AI Forge Support"}
+}
