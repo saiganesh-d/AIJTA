@@ -17,4 +17,8 @@ One closed ticket per file, with an `expected` block:
 - `files` – the files the real fix changed (used for the automatic "root-cause file ok" column).
 - `base_commit` – a commit **before** the real fix, so neither approach can see the answer.
 
+The same folder works for `forge check-retrieval <folder>` (free, no Copilot). There you can also add
+`"related": ["SUP-700", ...]`: past tickets a human would call related, to measure past-ticket retrieval.
+Run it first, tune `team.json → context`, then spend credits on `forge baseline`.
+
 Pick about 10 tickets with known root causes. Report the real numbers, including the tickets Forge loses.

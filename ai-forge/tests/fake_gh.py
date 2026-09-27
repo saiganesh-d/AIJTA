@@ -16,7 +16,7 @@ if a[:2] == ["pr", "create"]:
 if a[:2] == ["pr", "view"]:
     st = Path(os.environ["FAKE_GH_DIR"]) / "pr_state.json"
     if "state,mergeCommit" in a:
-        print(st.read_text() if st.exists() else json.dumps({"state": "OPEN", "mergeCommit": None}))
+        print(st.read_text(encoding="utf-8") if st.exists() else json.dumps({"state": "OPEN", "mergeCommit": None}))
         sys.exit(0)
     sys.exit(1)
 sys.exit(1)

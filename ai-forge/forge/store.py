@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS pending_requests(
   payload_json TEXT);
 CREATE TABLE IF NOT EXISTS events(ts TEXT, key TEXT, event TEXT, detail TEXT);
 CREATE INDEX IF NOT EXISTS ix_events_event ON events(event);
+CREATE TABLE IF NOT EXISTS context_needs(
+  ts TEXT, tickets TEXT, symbol TEXT, source TEXT, in_pack INT, terms TEXT);
 """
 
 STATUSES = {"new", "cooling", "ready", "analyzing", "awaiting_decision", "approved", "fixing", "fix_ready", "pr_open", "merged",
@@ -205,6 +207,24 @@ class Store:
     @staticmethod
     def _event(con, key: str, event: str, detail: str = "") -> None:
         con.execute("INSERT INTO events(ts, key, event, detail) VALUES (?,?,?,?)", (now(), key, event, detail))
+
+    def add_needs(self, tickets: list[str], needs: list[tuple[str, str, bool]], terms: str = "") -> None:
+        """Code an analysis needed: (symbol, source 'evidence'|'lookup', already in the pack?)."""
+        with self.tx() as con:
+            con.executemany("INSERT INTO context_needs(ts, tickets, symbol, source, in_pack, terms) VALUES (?,?,?,?,?,?)",
+                            [(now(), ",".join(tickets), s, src, int(hit), terms) for s, src, hit in needs])
+
+    def gaps(self, limit: int = 20) -> list[dict]:
+        """Code Copilot needed that the pack did not contain, most frequent first."""
+        return [dict(r) for r in self.con.execute(
+            "SELECT symbol, COUNT(*) AS times, GROUP_CONCAT(DISTINCT tickets) AS tickets, "
+            "GROUP_CONCAT(DISTINCT source) AS sources FROM context_needs WHERE in_pack=0 "
+            "GROUP BY symbol ORDER BY times DESC, symbol LIMIT ?", (limit,))]
+
+    def coverage(self) -> tuple[int, int]:
+        """(evidence symbols already in the pack, all evidence symbols) over all analyses."""
+        r = self.con.execute("SELECT COALESCE(SUM(in_pack),0), COUNT(*) FROM context_needs WHERE source='evidence'").fetchone()
+        return int(r[0]), int(r[1])
 
     def event(self, key: str, event: str, detail: str = "") -> None:
         self._event(self.con, key, event, detail)

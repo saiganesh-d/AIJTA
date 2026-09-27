@@ -13,22 +13,26 @@ prompt = argv[argv.index("-p") + 1]
 agent = argv[argv.index("--agent") + 1] if "--agent" in argv else ("global" if "AGENT.md" in prompt else "baseline")
 scenario = Path(os.environ["FAKE_COPILOT_SCENARIO"])
 state = scenario.with_suffix(".state.json")
-counts = json.loads(state.read_text()) if state.exists() else {}
+counts = json.loads(state.read_text(encoding="utf-8")) if state.exists() else {}
 n = counts.get(agent, 0)
 counts[agent] = n + 1
 state.write_text(json.dumps(counts))
 with scenario.with_suffix(".calls.jsonl").open("a") as fh:
     fh.write(json.dumps({"agent": agent, "argv": argv, "cwd": os.getcwd(),
                          "forge_files": sorted(p.name for p in Path(".forge").glob("*")) if Path(".forge").exists() else []}) + "\n")
-responses = json.loads(scenario.read_text()).get(agent, [])
+responses = json.loads(scenario.read_text(encoding="utf-8")).get(agent, [])
 if not responses:
     print("no scripted response", file=sys.stderr)
     sys.exit(1)
 r = responses[min(n, len(responses) - 1)]
+for lk in r.get("lookups") or []:  # simulate forge-index MCP calls, logged exactly like the real server does
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # forge may not be pip-installed
+    from forge.copilot import log_lookup
+    log_lookup(Path(os.environ["AI_FORGE_HOME"]), lk["tool"], lk.get("arg", ""), lk["symbols"], lk.get("read", True))
 for rel, content in (r.get("edits") or {}).items():
     p = Path(rel)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content)
+    p.write_text(content, encoding="utf-8")
 if "json" in r:
     print("Working on it.\n```json\n" + json.dumps(r["json"], indent=1) + "\n```")
 else:

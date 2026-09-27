@@ -13,7 +13,9 @@ from datetime import datetime, timedelta
 
 from . import __version__
 from . import config as C
-from .copilot import tokens_today
+from . import gitwt
+from .copilot import tokens_this_month, tokens_today
+from .history import sync_ticket_map
 from .index.indexer import build_repo_map, index_repo
 from .shared import atomic_write
 
@@ -95,9 +97,10 @@ def self_update(cfg: C.Config, log) -> bool:
 def heartbeat(cfg: C.Config, extra: dict) -> None:
     atomic_write(cfg.shared / "runners" / f"{cfg.user_id}.json", {
         "schema": 1, "user": cfg.user_id, "last_run": datetime.now().isoformat(timespec="seconds"),
-        "tool_version": (C.HOME / "installed_version").read_text().strip()
+        "tool_version": (C.HOME / "installed_version").read_text(encoding="utf-8").strip()
         if (C.HOME / "installed_version").exists() else __version__,
-        "mcp_mode": cfg.mcp_mode, "tokens_today_est": tokens_today(), **extra})
+        "mcp_mode": cfg.mcp_mode, "tokens_today_est": tokens_today(), "tokens_month_est": tokens_this_month(),
+        **extra})
 
 
 def run_once(force: bool = False) -> dict:
@@ -123,36 +126,55 @@ def _run(force: bool) -> dict:
     from .setup_wizard import sync_agents
     from .store import Store
 
-    self_update(cfg, log)
-    sync_agents(cfg)
-    stats = index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db, log=lambda *_: None)
-    if stats["files_reindexed"] or not cfg.repo_map.exists():
-        build_repo_map(cfg.index_db, cfg.repo_map)
-    idx = Index(cfg.index_db, cfg.repo_path)
-    store = Store(cfg.db_path)
-    recovered = store.recover_interrupted()
-    if recovered:
-        log(f"recovered after an interrupted run: {recovered}")
-    client = jira.client(cfg)
+    results, errors, done = {}, {}, []
 
-    stages = [
-        ("sync_jira", lambda: jira.sync(cfg, store, client, log)),
-        ("preclassify", lambda: triage.preclassify(cfg, store, idx, client, log)),
-        ("process_decisions", lambda: cards.process_decisions(cfg, store, log)),
-        ("repost_stale", lambda: cards.repost_stale(cfg, store)),
-        ("analyze_groups", lambda: analyze.analyze_groups(cfg, store, idx, client, log)),
-        ("merge_watch", lambda: conflicts.watch(cfg, store, idx, log)),  # before fixes: unblocks waiting tickets
-        ("run_fixes", lambda: fixer.run_fixes(cfg, store, idx, log)),
-    ]
-    results, errors = {}, {}
-    for name, fn in stages:
+    def stage(name, fn, needs=()):
+        """Isolate every step: log, report in the heartbeat, keep going. Skip steps whose inputs failed."""
+        if any(n not in done for n in needs):
+            return None
         try:
             results[name] = fn()
-        except Exception as e:  # isolate stages: log, report in the heartbeat, keep going
+            done.append(name)
+            return results[name]
+        except Exception as e:
             errors[name] = f"{e.__class__.__name__}: {e}"[:300]
             log(f"stage {name} failed:\n{traceback.format_exc()}")
-    heartbeat(cfg, {"index_commit": stats["commit"], "stages_ok": [n for n, _ in stages if n not in errors],
-                    "errors": errors, "counts": metrics.heartbeat_counts(store), "jira_requests": client.requests,
-                    "pid": os.getpid()})
+            return None
+
+    store = Store(cfg.db_path)
+    idx = client = None
+    try:
+        stage("self_update", lambda: self_update(cfg, log))
+        stage("sync_agents", lambda: sync_agents(cfg))
+        stage("recover", lambda: store.recover_interrupted())
+        if results.get("recover"):
+            log(f"recovered after an interrupted run: {results['recover']}")
+        # fetch every branch so analysis and fixes start from the latest remote state; a failed fetch
+        # is reported and the run continues on the last fetched origin/main
+        stage("fetch", lambda: gitwt.fetch(cfg.repo_path))
+        stats = stage("index", lambda: index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db, fetch=False,
+                                                  log=lambda *_: None))
+        if stats and (stats["files_reindexed"] or not cfg.repo_map.exists()):
+            build_repo_map(cfg.index_db, cfg.repo_map)
+        if cfg.ctx("git_ticket_map"):  # ticket → files from commit messages; only new commits are read
+            stage("ticket_map", lambda: sync_ticket_map(cfg.repo_path, cfg.base_ref, cfg.index_db), needs=("index",))
+        if stats or cfg.index_db.exists():  # a stale index is still better than no run
+            idx = stage("open_index", lambda: Index(cfg.index_db, cfg.repo_path))
+        client = stage("jira_client", lambda: jira.client(cfg))
+
+        stage("sync_jira", lambda: jira.sync(cfg, store, client, log), needs=("jira_client",))
+        stage("preclassify", lambda: triage.preclassify(cfg, store, idx, client, log), needs=("open_index", "jira_client"))
+        stage("process_decisions", lambda: cards.process_decisions(cfg, store, log))
+        stage("repost_stale", lambda: cards.repost_stale(cfg, store))
+        stage("analyze_groups", lambda: analyze.analyze_groups(cfg, store, idx, client, log),
+              needs=("open_index", "jira_client"))
+        stage("merge_watch", lambda: conflicts.watch(cfg, store, idx, log), needs=("open_index",))  # unblocks waiting fixes
+        stage("run_fixes", lambda: fixer.run_fixes(cfg, store, idx, log), needs=("open_index",))
+    finally:  # always report, so a failure is visible in runners/<user>.json
+        heartbeat(cfg, {"index_commit": (results.get("index") or {}).get("commit"), "stages_ok": done,
+                        "errors": errors, "counts": metrics.heartbeat_counts(store),
+                        "jira_requests": getattr(client, "requests", 0), "pid": os.getpid()})
+    for handle in ("open_index", "jira_client"):  # objects, not results
+        results.pop(handle, None)
     log(f"run done: {results} errors={list(errors)}")
     return {"results": results, "errors": errors}

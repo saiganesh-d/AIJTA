@@ -25,6 +25,9 @@ def main() -> None:
     b = sub.add_parser("baseline", help="baseline experiment: plain Copilot vs Forge on closed tickets")
     b.add_argument("tickets_dir", help="folder of ticket JSON files with an 'expected' block")
     b.add_argument("--no-fix", action="store_true", help="compare analysis only (skip the fixer run)")
+    sub.add_parser("gaps", help="code Copilot needed that the context pack did not contain (tune retrieval)")
+    cr = sub.add_parser("check-retrieval", help="free: does the context pack find the right code and past tickets?")
+    cr.add_argument("tickets_dir", help="folder of closed-ticket JSON files with an 'expected' block")
     a = ap.parse_args()
 
     if a.cmd == "setup":
@@ -55,11 +58,21 @@ def main() -> None:
         from . import config as C
         from .context_pack import build
         from .index.store import Index
+        from . import analyze, triage
+        from .signals import error_signature
+        from .store import Store
         cfg = C.load()
         text = Path(a.file).read_text(encoding="utf-8", errors="replace")
-        pack, stats = build(Index(cfg.index_db, cfg.repo_path),
-                            [{"key": "LOCAL-1", "summary": text.splitlines()[0] if text else "", "description": text}],
+        idx = Index(cfg.index_db, cfg.repo_path)
+        t = {"key": "LOCAL-1", "summary": text.splitlines()[0] if text else "", "description": text,
+             "comments": [], "attachments": [], "signature": error_signature(text)}
+        matches = triage.past_matches(cfg, Store(cfg.db_path), idx, [t])  # same sources as a real analysis
+        extras = {"past_matches": [m["line"] for m in matches] if cfg.ctx("past_tickets") else [],
+                  "recent_changes": analyze.recent_for(cfg, idx, text),
+                  "past_evidence": analyze.past_evidence(cfg, matches)}
+        pack, stats = build(idx, [analyze.pack_ticket(t)], extras,
                             budget_tokens=cfg.threshold("context_budget_tokens", 7000))
+        stats.pop("symbols", None)
         sys.stdout.write(pack)
         print(f"\n---\n{stats}", file=sys.stderr)
     elif a.cmd == "run":
@@ -86,6 +99,22 @@ def main() -> None:
         from . import config as C
         from .metrics import baseline
         out = baseline(C.load(), Path(a.tickets_dir), with_fix=not a.no_fix)
+        print(out.read_text(encoding="utf-8"))
+        print(f"saved: {out}")
+    elif a.cmd == "gaps":
+        from . import config as C
+        from .store import Store
+        st = Store(C.load().db_path)
+        hit, total = st.coverage()
+        print(f"Evidence already in the context pack: {hit}/{total}" + (f" ({hit / total:.0%})" if total else ""))
+        print("symbol | times missed | via | tickets")
+        for g in st.gaps():
+            print(f"{g['symbol']} | {g['times']} | {g['sources']} | {g['tickets']}")
+    elif a.cmd == "check-retrieval":
+        from pathlib import Path
+        from . import config as C
+        from .evaluate import check_retrieval
+        out = check_retrieval(C.load(), Path(a.tickets_dir))
         print(out.read_text(encoding="utf-8"))
         print(f"saved: {out}")
     elif a.cmd == "stats":

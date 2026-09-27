@@ -50,6 +50,11 @@ def counts(store, since: str = "") -> dict:
         "needs_info_by_rules": ev("rule:needs_info"), "approval_cards": ev("card:approval"),
         "approved": ev("status:approved"), "rejected": ev("status:rejected"),
         "prs": ev("pr") + ev("pr_unverified"), "prs_test_verified": ev("pr"), "merged": ev("status:merged"),
+        "resolved": ev("status:resolved"),
+        # quality: how often the AI was wrong and a guard or a human caught it
+        "unverified_citations": ev("quality:unverified_citations"), "scope_violations": ev("quality:scope_violation"),
+        "broke_existing_tests": ev("quality:broke_existing_tests"), "plan_invalid": ev("status:plan_invalid"),
+        "fix_failed": ev("status:fix_failed"),
         "copilot_calls": int(tok[0]), "tokens": int(tok[1]),
     }
 
@@ -59,14 +64,17 @@ def heartbeat_counts(store) -> dict:
 
 
 def savings(c: dict, a: dict) -> dict:
-    """Estimated engineer minutes saved, from outcome counts and the team's assumptions."""
-    code = c["approval_cards"]
+    """Estimated engineer minutes saved. Conservative: only work a human accepted earns the big credits.
+    - triage: every ticket the tool triaged (not out-of-scope tickets it merely skipped)
+    - root cause: approved code-bug analyses only (a rejected analysis saved nothing)
+    - non-code answer: info/duplicate cards the human marked resolved
+    - fix: test-verified fixes only"""
     minutes = (
-        (c["analyzed"] + c["duplicates"] + c["needs_info_by_rules"] + c["skipped_by_rules"]) * a["minutes_triage_per_ticket"]
-        + code * a["minutes_root_cause_per_code_bug"]
-        + c["info_only"] * a["minutes_resolution_per_non_code"]
-        + c["prs"] * a["minutes_fix_per_pr"])
-    calls_avoided = c["duplicates"] + c["needs_info_by_rules"] + c["skipped_by_rules"] + c["grouped"]
+        (c["analyzed"] + c["duplicates"] + c["needs_info_by_rules"]) * a["minutes_triage_per_ticket"]
+        + c["approved"] * a["minutes_root_cause_per_code_bug"]
+        + c.get("resolved", 0) * a["minutes_resolution_per_non_code"]
+        + c["prs_test_verified"] * a["minutes_fix_per_pr"])
+    calls_avoided = c["duplicates"] + c["needs_info_by_rules"] + c["grouped"]  # skipped tickets never needed a call
     handled = c["analyzed"] + c["duplicates"] + c["needs_info_by_rules"]
     per_ticket = c["tokens"] / max(1, handled)
     out = {"hours_saved": round(minutes / 60, 1), "copilot_calls_avoided": calls_avoided,
@@ -101,21 +109,29 @@ def report(cfg: C.Config, store, team: bool = False, out: Path | None = None) ->
     tta = time_to_analysis(store) if not team else None
     out = out or (C.HOME / "reports" / f"forge-report-{'team' if team else cfg.user_id}-{date.today()}.html")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(_html(cfg, people, total, s, a, week, tta, team), encoding="utf-8")
+    ctx = None if team else {"coverage": store.coverage(), "gaps": store.gaps(10)}
+    out.write_text(_html(cfg, people, total, s, a, week, tta, team, ctx), encoding="utf-8")
     return out
 
 
 def _zero() -> dict:
     return {k: 0 for k in ("analyzed", "grouped", "info_only", "duplicates", "skipped_by_rules", "needs_info_by_rules",
                            "approval_cards", "approved", "rejected", "prs", "prs_test_verified", "merged",
-                           "copilot_calls", "tokens", "analysis_calls_saved_by_grouping")}
+                           "resolved", "unverified_citations", "scope_violations", "broke_existing_tests",
+                           "plan_invalid", "fix_failed", "copilot_calls", "tokens", "analysis_calls_saved_by_grouping")}
 
 
-def _html(cfg, people, total, s, a, week, tta, team) -> str:
+def _html(cfg, people, total, s, a, week, tta, team, ctx=None) -> str:
     e = html.escape
     tiles = [("Engineer hours saved (est.)", s["hours_saved"]), ("Tickets handled", s["tickets_handled"]),
              ("Copilot calls avoided", s["copilot_calls_avoided"]), ("Tokens per ticket", f"{s['tokens_per_ticket']:,}"),
              ("Draft PRs (test-verified)", f"{total.get('prs', 0)} ({total.get('prs_test_verified', 0)})")]
+    decided = total.get("approved", 0) + total.get("rejected", 0)
+    if decided:  # accuracy as judged by the human: approved / (approved + rejected)
+        tiles.append(("Analyses approved", f"{total.get('approved', 0) / decided:.0%} of {decided}"))
+    hit, need = (ctx or {}).get("coverage") or (0, 0)
+    if need:  # retrieval quality from real runs: evidence Copilot cited that was already in the pack
+        tiles.append(("Evidence already in context", f"{hit / need:.0%} of {need}"))
     if "token_reduction_vs_baseline" in s:
         tiles.append(("Tokens vs plain Copilot", "−" + s["token_reduction_vs_baseline"]))
     if "cost_saved" in s:
@@ -129,6 +145,12 @@ def _html(cfg, people, total, s, a, week, tta, team) -> str:
     assumptions = "".join(f"<li>{e(k.replace('_', ' '))}: <b>{e(str(v))}</b></li>" for k, v in a.items())
     tiles_html = "".join(f'<div class="tile"><div class="v">{e(str(v))}</div><div class="l">{e(l)}</div></div>'
                          for l, v in tiles)
+    gap_rows = "".join(f"<tr><td>{e(g['symbol'])}</td><td>{g['times']}</td><td>{e(g['sources'] or '')}</td>"
+                       f"<td>{e(g['tickets'] or '')}</td></tr>" for g in (ctx or {}).get("gaps") or [])
+    gaps_html = ("<h2>Context gaps</h2><p>Code Copilot needed that the context pack did not contain. Frequent entries "
+                 "point at retrieval to improve (fewer lookups = fewer tokens on every future ticket).</p>"
+                 "<div class='wrap'><table><tr><th>code</th><th>times missed</th><th>via</th><th>tickets</th></tr>"
+                 f"{gap_rows}</table></div>") if gap_rows else ""
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>AI Forge report</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
@@ -146,8 +168,11 @@ td:first-child,th:first-child{{text-align:left}} ul{{color:var(--muted)}}
 <div class="sub">{'Team' if team else e(cfg.user_id)} · generated {datetime.now():%Y-%m-%d %H:%M} · all time{f" · this week: {week['analyzed']} analyzed, {week['prs']} PRs" if week else ''}</div>
 <div class="tiles">{tiles_html}</div>
 <h2>Outcomes</h2><div class="wrap"><table><tr><th>metric</th>{head}</tr>{rows}</table></div>
+{gaps_html}
 <h2>How "hours saved" is estimated</h2>
-<p>Each outcome is multiplied by the manual effort it replaces. Adjust these in <code>team.json → savings</code>
+<p>Each accepted outcome is multiplied by the manual effort it replaces: triage for every ticket handled,
+root-cause time only for analyses you approved, non-code time only for answers you marked resolved, fix time
+only for test-verified fixes. Rejected or failed work earns nothing. Adjust these in <code>team.json → savings</code>
 and back them with the baseline experiment (<code>forge baseline</code>).</p><ul>{assumptions}</ul>
 <p>Tokens are parsed from Copilot CLI output where available, otherwise estimated (chars/4). Reconcile weekly with the GitHub billing report.</p>
 </main></body></html>"""

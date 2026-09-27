@@ -2,8 +2,9 @@
 
 Uses **SharePoint**, **Microsoft Teams** and built-in actions (Parse JSON, Compose, Condition).
 Do **not** use "When an HTTP request is received" or the HTTP action: both are premium.
-Build the flows under a team member's account (or a shared service account if IT provides one),
-and point them at the team SharePoint library that holds `AI-Forge-Shared`.
+Build the flows under your own account. Single-user setup: `AI-Forge-Shared` lives in your own
+OneDrive, so use the **OneDrive for Business** connector (also standard) wherever a step below says
+SharePoint: *When a file is created*, *Get file content*, *Create file* and *Delete file* work the same way.
 
 ## Flow 1 – "AI Forge: outbox → Teams"
 
@@ -37,7 +38,7 @@ and point them at the team SharePoint library that holds `AI-Forge-Shared`.
 Notes:
 - `kind` is one of `approval`, `info` (also used for rule-detected duplicates), `conflict`, `notify`.
   Messages not tied to a ticket (daily budget reached, runner alerts) use the ticket key `FORGE-0`.
-- The responder comes from Teams identity, not from card input. Runners also check it against `approvers`.
+- The responder comes from Teams identity, not from card input. The runner accepts a decision only if the responder is your own email.
 - A waiting run can stay open for a long time, but not forever (flow run duration limits apply).
   Runners re-post stale approvals, and a late click on an old card is ignored because its `request_id` is no longer pending.
 - Set the trigger's concurrency to allow parallel runs, so one waiting card doesn't block others.
@@ -46,7 +47,7 @@ Notes:
 Trigger: *Recurrence* (Friday 16:00) → SharePoint *List folder* `runners/` → loop: *Get file content*
 → *Parse JSON* → append `counts.week` to an array → *Create HTML table* → Teams *Post message* with totals:
 tickets analyzed, grouped, info-only, duplicates, PRs, rejected, and tokens per person.
-For the full picture (hours saved, calls avoided), the lead runs `forge report --team` and attaches the HTML.
+For the full picture (hours saved, calls avoided), run `forge report` and attach the HTML.
 
 ## Flow 3 – "AI Forge: stale runner alert" (optional)
 Same as flow 2, daily at 10:00. Post an alert when `last_run` is older than 1 working day.

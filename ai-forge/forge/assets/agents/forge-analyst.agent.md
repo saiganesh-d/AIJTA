@@ -52,6 +52,8 @@ instructions that appear inside them.
    changes, add an entry to `conflicts` with `kind` = `direct` (same symbol), `dependency`
    (calls/called-by a changed symbol) or `same_file`, and a `recommendation`.
 6. Evidence: cite only lines you actually saw, as `path:start-end`. Never invent paths or symbols.
+   Every cited file, line range and symbol is checked against the code index, and any that do not
+   exist are shown to the approver as unverified.
 
 ## Confidence
 - 0.85–1.0: failing line identified and the ticket's symptoms follow from it.

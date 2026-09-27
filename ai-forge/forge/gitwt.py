@@ -15,7 +15,7 @@ class GitError(RuntimeError):
 
 
 def git(cwd, *args, check: bool = True, timeout: int = 300) -> subprocess.CompletedProcess:
-    r = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, errors="replace",
+    r = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=timeout)
     if check and r.returncode != 0:
         raise GitError(f"git {' '.join(args[:3])}: {(r.stderr or r.stdout).strip()[:400]}")
@@ -24,6 +24,32 @@ def git(cwd, *args, check: bool = True, timeout: int = 300) -> subprocess.Comple
 
 def out(cwd, *args) -> str:
     return git(cwd, *args).stdout.strip()
+
+
+def fetch(repo: str) -> str:
+    """Fetch every branch from origin (and drop deleted ones). Raises on failure so the run reports it;
+    callers then work from the last fetched state. Your own working copy is never touched."""
+    git(repo, "fetch", "--prune", "--quiet", "origin", timeout=180)
+    return "ok"
+
+
+def drift(repo: str, since: str | None, ref: str, files: list[str]) -> dict:
+    """What changed in `files` between the analyzed commit and `ref` (the latest fetched base)."""
+    if not since or not files:
+        return {}
+    changed = git(repo, "diff", "--name-only", f"{since}..{ref}", "--", *files, check=False).stdout.split()
+    if not changed:
+        return {}
+    log = git(repo, "log", "--format=%h %an: %s", "-n", "10", f"{since}..{ref}", "--", *changed, check=False).stdout
+    return {"analyzed_at_commit": since, "now": out(repo, "rev-parse", "--short", ref), "files": changed,
+            "commits": log.strip().splitlines()}
+
+
+def already_fixed(repo: str, ref: str, key: str) -> str | None:
+    """A commit on the latest base that mentions the ticket key (someone fixed it meanwhile), reverts excluded."""
+    r = git(repo, "log", ref, "-E", "-n", "5", "--format=%h %s",
+            f"--grep=(^|[^A-Za-z0-9-]){re.escape(key)}([^0-9]|$)", check=False)
+    return next((l for l in r.stdout.splitlines() if not l.split(" ", 1)[-1].startswith('Revert "')), None)
 
 
 def worktree_add(repo: str, path: Path, ref: str, branch: str | None = None) -> Path:
@@ -53,7 +79,7 @@ def worktree_remove(repo: str, path: Path) -> None:
 def run_cmd(cmd: str, cwd, timeout: int = 1800) -> tuple[int, str]:
     """Run a team-configured test command (from team.json, trusted) and return (rc, trimmed output)."""
     try:
-        r = subprocess.run(cmd, cwd=str(cwd), shell=True, capture_output=True, text=True, errors="replace",
+        r = subprocess.run(cmd, cwd=str(cwd), shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=timeout)
         return r.returncode, (r.stdout + "\n" + r.stderr)[-4000:]
     except subprocess.TimeoutExpired:
@@ -88,6 +114,26 @@ def diff_lines(wt, base: str) -> dict[str, list[int]]:
             start, n = int(m.group(1)), int(m.group(2) or 1)
             res.setdefault(cur, []).extend(range(start, start + max(n, 1)))
     return res
+
+
+OLD_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@")
+
+
+def touched_base_symbols(idx, wt, base: str) -> list[str]:
+    """Indexed symbols of `base` whose lines the change modified or inserted into. Uses the old-side line
+    numbers of each hunk, so it matches the index of base exactly (no drift from added lines)."""
+    syms: list[str] = []
+    cur = None
+    for line in git(wt, "diff", "-U0", f"{base}..HEAD").stdout.splitlines():
+        if line.startswith("--- "):
+            cur = line[6:] if line.startswith("--- a/") else None
+        elif cur and (m := OLD_HUNK.match(line)):
+            start, n = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
+            for ln in (range(start, start + n) if n else [max(start, 1)]):  # n=0: pure insertion after `start`
+                s = idx.symbol_at(cur, ln)
+                if s and (key := f"{s['path']}::{s['qualname']}") not in syms:
+                    syms.append(key)
+    return syms
 
 
 def changed_symbols(idx, wt, base: str) -> list[str]:

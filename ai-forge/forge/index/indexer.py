@@ -46,7 +46,7 @@ class Sym:
 
 
 def _git(repo: str, *args) -> str:
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
 
 
 def _ls_tree(repo: str, ref: str) -> dict[str, tuple[str, int]]:

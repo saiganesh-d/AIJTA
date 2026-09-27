@@ -34,7 +34,8 @@ def live_mcp_test(cfg: C.Config) -> str:
             "--additional-mcp-config", f"@{mcp_config_path()}",
             "--allow-tool", "forge-index", "--deny-tool", "write", "--deny-tool", "shell"]
     for mode, extra in (("agent", ["--agent", "forge-doctor"]), ("global", [])):
-        r = subprocess.run(base + extra, cwd=str(cfg.worktree_root), capture_output=True, text=True, timeout=300)
+        r = subprocess.run(base + extra, cwd=str(cfg.worktree_root), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=300)
         if expected in r.stdout:
             return mode
     return "off"
@@ -58,7 +59,7 @@ def run(live: bool = False) -> None:
                      "install GitHub CLI + gh auth login, or set delivery.pull_request to false")
     mode = delivery(cfg)
     print(f"  delivery: {'draft PR' if mode['pull_request'] else 'push branch' if mode['push'] else 'local branch only (you push)'}")
-    ok &= _check("team.json present", bool(cfg.team), "team lead must create config/team.json")
+    ok &= _check("team.json present", bool(cfg.team), "run forge setup to create config/team.json")
     problems = C.validate_team(cfg.team, cfg.user_id)
     ok &= _check("team.json valid", not problems, "; ".join(problems[:6]))
     ok &= _check("shared folder writable", _writable(cfg.shared / "runners"), "check SharePoint permissions")

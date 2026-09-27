@@ -16,16 +16,16 @@ from forge.store import Store
 
 # ---------------- config ----------------
 def test_validate_team_flags_placeholders():
-    team = json.loads((C.ASSETS / "team.example.json").read_text())
+    team = json.loads((C.ASSETS / "team.example.json").read_text(encoding="utf-8"))
     team["models"]["forge-analyst"] = "REPLACE_WITH_MID_MODEL_ID"
     probs = C.validate_team(team, "nobody")
     assert any("forge-analyst is a placeholder" in p for p in probs)
     assert any("jira.base_url" in p for p in probs)
-    assert any("'nobody'" in p for p in probs)
+    assert not any("approver" in p or "lead" in p or "members" in p for p in probs)  # single user
 
 
 def test_run_refuses_invalid_team(env):
-    team = json.loads((env.shared / "config" / "team.json").read_text())
+    team = json.loads((env.shared / "config" / "team.json").read_text(encoding="utf-8"))
     team["models"]["forge-fixer"] = "REPLACE_WITH_MID_MODEL_ID"
     (env.shared / "config" / "team.json").write_text(json.dumps(team))
     res = pipeline.run_once(force=True)
@@ -196,12 +196,12 @@ def test_card_banners_and_escaping(env):
 
 def test_decision_with_wrong_action_or_stale_is_ignored(env):
     st, rid = _pending_approval(env)
-    d = {"schema": 1, "ticket_key": "SUP-1", "request_id": rid, "action": "build_on", "responder": "lead@x.test"}
+    d = {"schema": 1, "ticket_key": "SUP-1", "request_id": rid, "action": "build_on", "responder": "sai@x.test"}
     (env.shared / "decisions" / f"SUP-1__{rid}.json").write_text(json.dumps(d))
     assert cards.process_decisions(env.cfg, st, log=lambda *_: None) == []
     assert st.pending(rid)  # still pending
-    ravi = {**d, "action": "approve", "responder": "ravi@x.test"}  # approver, but neither assignee nor lead
-    (env.shared / "decisions" / f"SUP-1__{rid}.json").write_text(json.dumps(ravi))
+    other = {**d, "action": "approve", "responder": "someone@x.test"}  # only you can decide
+    (env.shared / "decisions" / f"SUP-1__{rid}.json").write_text(json.dumps(other))
     assert cards.process_decisions(env.cfg, st, log=lambda *_: None) == []
 
 
@@ -212,7 +212,7 @@ def test_stale_cards_are_reposted_and_old_clicks_ignored(env):
     new = [p["request_id"] for p in st.pending()]
     assert rid not in new and len(new) == 1
     assert new[0] in json.dumps(env.outbox()[f"SUP-1__{new[0]}.json"]["card"])
-    d = {"schema": 1, "ticket_key": "SUP-1", "request_id": rid, "action": "approve", "responder": "lead@x.test"}
+    d = {"schema": 1, "ticket_key": "SUP-1", "request_id": rid, "action": "approve", "responder": "sai@x.test"}
     (env.shared / "decisions" / f"SUP-1__{rid}.json").write_text(json.dumps(d))
     assert cards.process_decisions(env.cfg, st, log=lambda *_: None) == []
     assert st.ticket("SUP-1")["status"] != "approved"
@@ -231,12 +231,12 @@ def test_global_mode_uses_prefix_file_and_denies(env, tmp_path):
     res = copilot.run_agent(env.cfg, "forge-analyst", "Analyze.", wt, ["SUP-1"])
     call = env.calls()[-1]
     assert "--agent" not in call["argv"] and "AGENT.md" in call["argv"][call["argv"].index("-p") + 1]
-    assert "root-cause analyst" in (wt / ".forge" / "AGENT.md").read_text()
+    assert "root-cause analyst" in (wt / ".forge" / "AGENT.md").read_text(encoding="utf-8")
     assert "--additional-mcp-config" in call["argv"] and res.usage["input"] == 4200
 
 
 def test_budget_stops_calls(env, tmp_path):
-    env.cfg.team["members"]["sai"]["daily_token_budget"] = 1
+    env.cfg.team["budget"] = {"daily_tokens": 1}
     con = copilot._ledger()
     con.execute("INSERT INTO calls(day, agent, est_input_tokens) VALUES (?,?,?)", (date.today().isoformat(), "x", 10))
     con.commit()
@@ -269,7 +269,7 @@ def test_self_update_installs_newer_version(env, monkeypatch):
     ran = []
     monkeypatch.setattr(pipeline.subprocess, "run", lambda cmd, **kw: ran.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""))
     assert pipeline.self_update(env.cfg, log=lambda *_: None)
-    assert "tool-src" in ran[0][-1] and (env.home / "installed_version").read_text() == "0.2.0"
+    assert "tool-src" in ran[0][-1] and (env.home / "installed_version").read_text(encoding="utf-8") == "0.2.0"
     assert not pipeline.self_update(env.cfg, log=lambda *_: None)
 
 
@@ -280,10 +280,10 @@ def test_report_and_baseline(env):
     env.script(**{"forge-analyst": [{"json": {**ANALYSIS, "groups": [{**ANALYSIS["groups"][0], "tickets": ["SUP-1"]}]}}]})
     pipeline.run_once(force=True)
     out = metrics.report(env.cfg, Store(env.cfg.db_path))
-    html = out.read_text()
+    html = out.read_text(encoding="utf-8")
     assert "Engineer hours saved" in html and "prefers-color-scheme" in html
     team = metrics.report(env.cfg, Store(env.cfg.db_path), team=True)
-    assert "Team" in team.read_text()
+    assert "Team" in team.read_text(encoding="utf-8")
 
     bdir = env.tmp / "baseline"
     bdir.mkdir()
@@ -292,7 +292,7 @@ def test_report_and_baseline(env):
     env.script(**{"baseline": [{"edits": {"app/parser.py": "x = 1\n"}, "stdout": "done", "input": "40k", "output": 3000}],
                   "forge-analyst": [{"json": {**ANALYSIS, "groups": [{**ANALYSIS["groups"][0], "tickets": ["SUP-1"]}]}}],
                   "forge-fixer": [{"json": {"status": "done"}}]})
-    md = metrics.baseline(env.cfg, bdir).read_text()
+    md = metrics.baseline(env.cfg, bdir).read_text(encoding="utf-8")
     assert "| SUP-1 | plain copilot | 1 | 43,000 |" in md and "| SUP-1 | forge | 2 |" in md
     assert "code_bug | ✓ | ✓" in md
 

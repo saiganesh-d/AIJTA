@@ -49,7 +49,7 @@ def ticket_links(cfg: C.Config, keys: list[str]) -> str:
 
 
 def _assignee(cfg: C.Config) -> tuple[str, str]:
-    return cfg.me.get("name") or cfg.user_id, cfg.me.get("email") or cfg.user_email
+    return cfg.me.get("name") or cfg.user_id, cfg.my_email
 
 
 def _write_outbox(cfg: C.Config, rid: str, key: str, kind: str, wait: bool, card=None, text=None) -> None:
@@ -75,6 +75,11 @@ def _steps(items) -> str:
     return "\n".join(f"{i}. {s}" for i, s in enumerate(items or [], 1)) or "-"
 
 
+def _unverified_note(g: dict) -> str:
+    bad = g.get("unverified_citations") or []
+    return f"\n\n⚠ Not found in the code (check before approving): {', '.join(bad[:5])}" if bad else ""
+
+
 def send_approval(cfg: C.Config, store, g: dict, tokens: int, regression: dict | None, conflict: dict | None) -> str:
     keys = g["tickets"]
     name, email = _assignee(cfg)
@@ -86,7 +91,7 @@ def send_approval(cfg: C.Config, store, g: dict, tokens: int, regression: dict |
         "conflictNote": (conflict or {}).get("note", ""), "classification": g.get("classification"),
         "risk": g.get("risk", "-"), "confidence": f"{g.get('confidence', 0):.0%}",
         "files": ", ".join(g.get("affected_files") or []) or "-", "tokens": f"{tokens:,}",
-        "rootCause": g.get("root_cause", ""),
+        "rootCause": g.get("root_cause", "") + _unverified_note(g),
         "fixSteps": _steps(fix.get("steps")) + (f"\n\nTest: {fix['test_plan']}" if fix.get("test_plan") else ""),
         "ticketUrl": ticket_url(cfg, keys[0]),
     }
@@ -166,7 +171,7 @@ def update_analysis(cfg: C.Config, key: str, **fields) -> None:
 
 def _base_commit(cfg: C.Config) -> str:
     import subprocess
-    r = subprocess.run(["git", "rev-parse", cfg.base_ref], cwd=cfg.repo_path, capture_output=True, text=True)
+    r = subprocess.run(["git", "rev-parse", cfg.base_ref], cwd=cfg.repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return r.stdout.strip()[:12] or "unknown"
 
 
@@ -175,11 +180,8 @@ def accept(cfg: C.Config, t: dict, d: dict, pend: list[dict]) -> tuple[bool, str
     if not pend or pend[0]["ticket_key"] != d["ticket_key"]:
         return False, "card is no longer pending (stale or already answered)"
     who = (d.get("responder") or "").lower()
-    if who not in {a.lower() for a in cfg.team.get("approvers") or []}:
-        return False, f"{who or 'unknown'} is not an approver"
-    allowed = {(cfg.me.get("email") or cfg.user_email).lower(), (cfg.team.get("lead") or "").lower()}
-    if who not in allowed:
-        return False, f"{who} is neither the assignee nor the lead"
+    if not who or who != cfg.my_email:  # single user: you own the code, only you decide
+        return False, f"{who or 'unknown'} is not {cfg.my_email}; only you can decide on your tickets"
     if d["action"] not in ALLOWED.get(pend[0]["kind"], set()):
         return False, f"action '{d['action']}' does not fit a {pend[0]['kind']} card"
     return True, ""

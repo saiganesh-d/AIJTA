@@ -95,13 +95,11 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_COPILOT_SCENARIO", str(scenario))
     monkeypatch.setenv("FAKE_GH_DIR", str(tmp_path))
 
-    team = json.loads((C.ASSETS / "team.example.json").read_text())
+    team = json.loads((C.ASSETS / "team.example.json").read_text(encoding="utf-8"))
     team["jira"] = {"mode": "file", "base_url": "https://jira.x.test", "scope_jql": "project = SUP",
                     "support_issue_types": ["Bug", "Support"], "post_comments": True}
-    team["lead"] = "lead@x.test"
-    team["approvers"] = ["lead@x.test", "sai@x.test", "ravi@x.test"]
-    team["members"] = {"sai": {"name": "Sai", "email": "sai@x.test", "github": "sai-gh", "daily_token_budget": 400000},
-                       "ravi": {"name": "Ravi", "email": "ravi@x.test", "github": "ravi-gh", "daily_token_budget": 400000}}
+    team["members"] = {"sai": {"name": "Sai", "email": "sai@x.test"}}  # optional: display name only
+    team["budget"] = {"daily_tokens": 400000, "monthly_tokens": 0}
     team["models"] = {k: "test-model" for k in team["models"]}
     team["models"]["escalation"] = "strong-model"
     team["thresholds"]["new_ticket_cooldown_minutes"] = 0
@@ -126,10 +124,10 @@ def env(tmp_path, monkeypatch):
 
     def calls():
         p = scenario.with_suffix(".calls.jsonl")
-        return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
     ns.calls = calls
 
     def outbox():
-        return {p.name: json.loads(p.read_text()) for p in (sh / "outbox").glob("*.json")}
+        return {p.name: json.loads(p.read_text(encoding="utf-8")) for p in (sh / "outbox").glob("*.json")}
     ns.outbox = outbox
     return ns

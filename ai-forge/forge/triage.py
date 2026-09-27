@@ -63,7 +63,7 @@ def predicted_symbols(idx: Index, text: str) -> set[str]:
 
 # ---------------- git facts (§5.9) ----------------
 def _git(repo: str, *args) -> str:
-    r = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, errors="replace")
+    r = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
@@ -127,31 +127,81 @@ def is_regression(facts: dict) -> bool:
 
 
 # ---------------- past matches (§5.9) ----------------
-def past_matches(cfg: C.Config, store, idx: Index, tickets: list[dict], k: int = 3) -> list[dict]:
+def related_code(idx: Index, text: str) -> tuple[list[str], list[str]]:
+    """(symbols, files) this text points to, strongest first: resolved stack frames, then search hits."""
+    syms = resolved_frames(idx, text) + idx.search(text, k=5, kinds=("function", "class"))
+    keys = list(dict.fromkeys(f"{s['path']}::{s['qualname']}" for s in syms))
+    return keys, list(dict.fromkeys(s["path"] for s in syms))
+
+
+def past_matches(cfg: C.Config, store, idx: Index, tickets: list[dict], k: int | None = None) -> list[dict]:
+    """Related past tickets, matched on the CODE first and on wording last. Tickets describe the same bug in
+    different words, but related bugs point at the same code. Score tiers (highest wins per ticket):
+      1.0       same error signature
+      0.7–0.9   a past fix touched the same function (Forge analyses)
+      0.5–0.65  a past fix touched the same file (Forge analyses, or commits that mention the ticket key)
+      ≤ 0.5     similar wording only (0.5 × text similarity)
+    Only candidates ≥ context.min_past_score are kept, at most context.max_past_tickets."""
+    k = k or cfg.ctx("max_past_tickets")
     own = {t["key"] for t in tickets}
     text = "\n".join(full_text(t) for t in tickets)
     sigs = {t.get("signature") for t in tickets if t.get("signature")}
+    syms, files = related_code(idx, text)
+    psyms, pfiles = set(syms), set(files)
     cands: dict[str, dict] = {}
+
+    def offer(key, score, why, analysis):
+        if key in own or score <= 0:
+            return
+        c = cands.setdefault(key, {"key": key, "score": 0.0, "why": why, "analysis": analysis})
+        if score > c["score"]:
+            c.update(score=score, why=why)
+        if len(analysis) > len(c["analysis"]):  # prefer the richer record (a Forge analysis)
+            c["analysis"] = {**analysis, **{k2: v for k2, v in c["analysis"].items() if k2 not in analysis}}
+
     for key, a in read_dir(cfg.shared / "analyses", TICKET_FILE).items():
-        if key in own:
-            continue
-        score = 1.0 if a.get("error_signature") in sigs else cosine(text, f"{a.get('summary', '')} {a.get('root_cause', '')}")
-        cands[key] = {"key": key, "score": score, "analysis": a}
+        if a.get("error_signature") and a["error_signature"] in sigs:
+            offer(key, 1.0, "same error signature", a)
+        hit = psyms & set(a.get("affected_symbols") or [])
+        if hit:
+            offer(key, 0.7 + 0.2 * len(hit) / max(1, len(psyms)), f"past fix touched {sorted(hit)[0]}", a)
+        fhit = pfiles & set(a.get("affected_files") or [])
+        if fhit:
+            offer(key, 0.55 + 0.1 * len(fhit) / max(1, len(pfiles)), f"past fix in {sorted(fhit)[0]}", a)
+        offer(key, 0.5 * cosine(text, f"{a.get('summary', '')} {a.get('root_cause', '')}"), "similar wording", a)
+    if cfg.ctx("git_ticket_map"):
+        from .history import fixes_touching
+        for key, f in fixes_touching(cfg.index_db, files).items():
+            fhit = pfiles & set(f["files"])
+            offer(key, 0.5 + 0.1 * len(fhit) / max(1, len(pfiles)), f"fix commit {f['sha'][:8]} touched {sorted(fhit)[0]}",
+                  {"summary": f["subject"], "fix_commit": f["sha"], "fixed_on": f["day"]})
     for h in store.history():
-        if h["key"] in own:
-            continue
-        score = 1.0 if h.get("signature") in sigs else cosine(text, f"{h['summary']} {h['description']}")
-        if h["key"] not in cands or cands[h["key"]]["score"] < score:
-            prev = (cands.get(h["key"]) or {}).get("analysis")
-            cands[h["key"]] = {"key": h["key"], "score": score,
-                               "analysis": prev or {"summary": h["summary"], "sprint": h.get("sprint")}}
-    top = sorted((c for c in cands.values() if c["score"] >= 0.3), key=lambda c: -c["score"])[:k]
+        rec = {"summary": h["summary"], "sprint": h.get("sprint")}
+        if h.get("signature") and h["signature"] in sigs:
+            offer(h["key"], 1.0, "same error signature", rec)
+        offer(h["key"], 0.5 * cosine(text, f"{h['summary']} {h['description']}"), "similar wording", rec)
+
+    floor = cfg.ctx("min_past_score")
+    top = sorted((c for c in cands.values() if c["score"] >= floor), key=lambda c: -c["score"])[:k]
     for c in top:
         c["facts"] = git_facts(cfg.repo_path, cfg.base_ref, c["key"], c["analysis"], idx)
-        c["line"] = fact_line(c["key"], c["analysis"], c["facts"])
         c["regression"] = is_regression(c["facts"])
-        c["same_signature"] = c["score"] == 1.0
+        c["same_signature"] = c["why"] == "same error signature"
+        c["line"] = match_line(c)
     return top
+
+
+def match_line(c: dict) -> str:
+    """One compact line per past ticket (~60–100 tokens): why it matched, what it was, how it was fixed."""
+    a = c["analysis"]
+    parts = [fact_line(c["key"], a, c["facts"]), f"matched: {c['why']}"]
+    if a.get("root_cause"):
+        parts.append(f"root cause: {' '.join(str(a['root_cause']).split())[:160]}")
+    elif a.get("summary"):
+        parts.append(f"was: {' '.join(str(a['summary']).split())[:100]}")
+    if a.get("fix_tests"):
+        parts.append(f"covered by test {', '.join(a['fix_tests'][:2])}")
+    return " | ".join(parts)
 
 
 def lessons(cfg: C.Config, component: str | None, n: int = 3) -> list[str]:

@@ -94,7 +94,7 @@ def test_revalidation_rebase_conflict_adapted(env):
     res = pipeline.run_once(force=True)
     assert res["results"]["merge_watch"]["adapted"] == 1, res
     wt = env.cfg.worktree_root / "fix-SUP-1"
-    assert "value.strip().replace" in (wt / "app" / "parser.py").read_text()
+    assert "value.strip().replace" in (wt / "app" / "parser.py").read_text(encoding="utf-8")
     assert git(wt, "rev-parse", "HEAD") == git(env.origin, "rev-parse", "forge/SUP-1")  # force-pushed
     assert any("adapted to SUP-7" in m.get("text", "") for m in env.outbox().values())
     # handled once: the next run does not revalidate against SUP-7 again

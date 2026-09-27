@@ -85,9 +85,28 @@ class Config:
     def threshold(self, key: str, default):
         return (self.team.get("thresholds") or {}).get(key, default)
 
+    def ctx(self, key: str):
+        """team.json → context: what goes into the pack Copilot gets (see CONTEXT_DEFAULTS)."""
+        return (self.team.get("context") or {}).get(key, CONTEXT_DEFAULTS[key])
+
     @property
     def me(self) -> dict:
         return (self.team.get("members") or {}).get(self.user_id) or {}
+
+    @property
+    def my_email(self) -> str:
+        """The only identity allowed to approve or reject: single-user mode, you own the code and the decisions."""
+        return (self.me.get("email") or self.user_email or "").lower()
+
+    def budget(self, key: str, default: int) -> int:
+        """team.json → budget.{daily_tokens, monthly_tokens}; 0 disables a limit.
+        Falls back to the older members.<me>.daily_token_budget."""
+        b = self.team.get("budget") or {}
+        if key in b:
+            return int(b[key] or 0)
+        if key == "daily_tokens" and "daily_token_budget" in self.me:
+            return int(self.me["daily_token_budget"])
+        return default
 
     @property
     def db_path(self) -> Path:
@@ -101,7 +120,24 @@ class Config:
         return None
 
 
-REQUIRED_TEAM_KEYS = ("jira", "members", "approvers", "lead", "models", "test")
+REQUIRED_TEAM_KEYS = ("jira", "models", "test")
+
+# What the context pack contains. Every source is local and free; each costs pack tokens only when it
+# finds something. Switch a source off (false / 0) in team.json → context if it doesn't pay off.
+CONTEXT_DEFAULTS = {
+    "past_tickets": True,            # related past tickets with root cause, fix and git facts
+    "max_past_tickets": 3,
+    "min_past_score": 0.3,           # tiers: same error 1.0 > same function ≥0.7 > same file ≥0.5 > wording (0.5 × similarity)
+    "git_ticket_map": True,          # learn ticket → files from commit messages ("SUP-12: ...") on base_ref
+    "recent_changes_days": 14,       # commits on the relevant files in the last N days (0 = off)
+    "recent_changes_max_commits": 5,
+    "recent_changes_diff_lines": 20,  # diff lines per commit (0 = one line per commit only)
+    "all_comments": True,            # all ticket comments, not only the reporter's
+    "past_evidence": True,           # current code at a strongly related past ticket's evidence (start where it ended)
+    "past_evidence_min_score": 0.5,  # same file or stronger (see min_past_score tiers)
+    "past_evidence_max_blocks": 2,
+    "learn_gaps": True,              # record code Copilot needed that the pack missed (forge gaps)
+}
 REQUIRED_MODELS = ("forge-doctor", "forge-config", "forge-analyst", "forge-fixer", "forge-adapter")
 
 
@@ -123,17 +159,9 @@ def validate_team(team: dict, user_id: str | None = None) -> list[str]:
     esc = models.get("escalation", "")
     if esc and str(esc).startswith("REPLACE"):
         probs.append("models.escalation is a placeholder (remove it or set \"auto\" to disable escalation)")
-    members = team.get("members") or {}
-    if user_id and user_id not in members:
-        probs.append(f"you ('{user_id}') are not listed in members")
-    for uid, m in members.items():
+    for uid, m in (team.get("members") or {}).items():  # optional: only needed for PR reviewers
         if "@" not in (m.get("email") or ""):
             probs.append(f"members.{uid}.email is missing")
-    approvers = [a.lower() for a in team.get("approvers") or []]
-    if not approvers:
-        probs.append("approvers is empty: nobody could approve a fix")
-    if team.get("lead") and team["lead"].lower() not in approvers:
-        probs.append("lead is not in approvers")
     targeted = (team.get("test") or {}).get("targeted", "")
     if targeted and "{test_path}" not in targeted:
         probs.append("test.targeted must contain {test_path}")

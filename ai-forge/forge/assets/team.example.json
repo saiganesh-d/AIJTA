@@ -20,37 +20,6 @@
     "sprint_field": "customfield_10020"
   },
   "base_ref": "origin/main",
-  "lead": "lead@yourorg.example",
-  "approvers": [
-    "lead@yourorg.example",
-    "sai@yourorg.example",
-    "ravi@yourorg.example",
-    "priya@yourorg.example"
-  ],
-  "members": {
-    "sai": {
-      "name": "Sai",
-      "email": "sai@yourorg.example",
-      "github": "sai-gh",
-      "daily_token_budget": 400000
-    },
-    "ravi": {
-      "name": "Ravi",
-      "email": "ravi@yourorg.example",
-      "github": "ravi-gh",
-      "daily_token_budget": 400000
-    },
-    "priya": {
-      "name": "Priya",
-      "email": "priya@yourorg.example",
-      "github": "priya-gh",
-      "daily_token_budget": 400000
-    }
-  },
-  "components_to_owner": {
-    "billing": "ravi",
-    "reports": "priya"
-  },
   "models": {
     "forge-doctor": "auto",
     "forge-config": "auto",
@@ -58,6 +27,10 @@
     "forge-fixer": "auto",
     "forge-adapter": "auto",
     "escalation": "auto"
+  },
+  "budget": {
+    "daily_tokens": 400000,
+    "monthly_tokens": 0
   },
   "thresholds": {
     "dedup_similarity": 0.88,
@@ -68,6 +41,20 @@
     "min_confidence_for_fix_card": 0.5,
     "escalate_below_confidence": 0.5,
     "new_ticket_cooldown_minutes": 10
+  },
+  "context": {
+    "past_tickets": true,
+    "max_past_tickets": 3,
+    "min_past_score": 0.3,
+    "git_ticket_map": true,
+    "recent_changes_days": 14,
+    "recent_changes_max_commits": 5,
+    "recent_changes_diff_lines": 20,
+    "all_comments": true,
+    "past_evidence": true,
+    "past_evidence_min_score": 0.5,
+    "past_evidence_max_blocks": 2,
+    "learn_gaps": true
   },
   "test": {
     "full": "pytest -q",

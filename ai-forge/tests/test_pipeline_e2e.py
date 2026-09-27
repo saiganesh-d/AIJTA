@@ -57,7 +57,7 @@ def seed(env):
                           "SSL handshake error, the TLS certificate seems wrong in this environment.", component="ops"))
 
 
-def decide(env, key, rid, action, responder="lead@x.test", comment=""):
+def decide(env, key, rid, action, responder="sai@x.test", comment=""):
     (env.shared / "decisions" / f"{key}__{rid}.json").write_text(json.dumps({
         "schema": 1, "ticket_key": key, "request_id": rid, "action": action, "responder": responder,
         "comment": comment, "responded_at": "2026-09-24T11:00:00"}))
@@ -88,38 +88,38 @@ def test_full_cycle(env):
     approval = next(m for m in box.values() if m["kind"] == "approval")
     text = json.dumps(approval["card"])
     assert "Group of 2" in text and "<at>Sai</at>" in text and "regression_banner" not in text
-    assert "SUP-3" in (env.shared / "jira-export" / "comments.log").read_text()
-    a1 = json.loads((env.shared / "analyses" / "SUP-1.json").read_text())
+    assert "SUP-3" in (env.shared / "jira-export" / "comments.log").read_text(encoding="utf-8")
+    a1 = json.loads((env.shared / "analyses" / "SUP-1.json").read_text(encoding="utf-8"))
     assert a1["group_tickets"] == ["SUP-1", "SUP-2"] and a1["classification"] == "code_bug"
     assert (env.shared / "inflight" / "SUP-1.json").exists()
     # worktrees cleaned up after analysis
     assert not list(env.cfg.worktree_root.glob("analyze-*"))
 
-    # a non-approver click is ignored and the card stays pending
+    # a click by anyone but you is ignored and the card stays pending
     decide(env, "SUP-1", approval["request_id"], "approve", responder="intruder@x.test")
     for f in (env.shared / "outbox").glob("*.json"):
         f.unlink()  # Power Automate consumed the cards
     pipeline.run_once(force=True)
     assert st.ticket("SUP-1")["status"] == "awaiting_decision"
-    assert any("not an approver" in m.get("text", "") for m in env.outbox().values())
+    assert any("only you can decide" in m.get("text", "") for m in env.outbox().values())
 
-    # the lead approves → fixer → verified test → push → draft PR
+    # you approve → fixer → verified test → push → draft PR
     decide(env, "SUP-1", approval["request_id"], "approve", comment="keep it minimal")
     res = pipeline.run_once(force=True)
     assert res["errors"] == {}, res
     t1 = st.ticket("SUP-1")
     assert t1["status"] == "pr_open" and t1["pr_url"].endswith("/pull/7")
     assert st.ticket("SUP-2")["status"] == "pr_open"
-    plan = json.loads((env.cfg.worktree_root / "fix-SUP-1" / ".forge" / "plan.json").read_text())
+    plan = json.loads((env.cfg.worktree_root / "fix-SUP-1" / ".forge" / "plan.json").read_text(encoding="utf-8"))
     assert plan["reviewer_note"] == "keep it minimal"
     assert git(env.origin, "branch", "--list", "forge/SUP-1")  # pushed
-    gh = [json.loads(l) for l in (env.tmp / "gh.calls.jsonl").read_text().splitlines()]
+    gh = [json.loads(l) for l in (env.tmp / "gh.calls.jsonl").read_text(encoding="utf-8").splitlines()]
     create = next(c for c in gh if c[:2] == ["pr", "create"])
     title = create[create.index("--title") + 1]
     body = create[create.index("--body") + 1]
     assert "⚠" not in title, title  # test verified: failed before, passes after
-    assert "Fails without the fix: yes" in body and "ravi-gh" in create
-    inflight = json.loads((env.shared / "inflight" / "SUP-1.json").read_text())
+    assert "Fails without the fix: yes" in body and "--reviewer" not in create  # single user: no reviewer
+    inflight = json.loads((env.shared / "inflight" / "SUP-1.json").read_text(encoding="utf-8"))
     assert inflight["status"] == "pr_open" and "app/parser.py::parse_price" in inflight["changed_symbols"]
     assert any("Draft PR ready" in m.get("text", "") for m in env.outbox().values())
 
@@ -127,10 +127,10 @@ def test_full_cycle(env):
     (env.tmp / "pr_state.json").write_text(json.dumps({"state": "MERGED", "mergeCommit": {"oid": "abc1234"}}))
     pipeline.run_once(force=True)
     assert st.ticket("SUP-1")["status"] == "merged"
-    assert json.loads((env.shared / "analyses" / "SUP-1.json").read_text())["fix_commit"] == "abc1234"
+    assert json.loads((env.shared / "analyses" / "SUP-1.json").read_text(encoding="utf-8"))["fix_commit"] == "abc1234"
     assert not (env.cfg.worktree_root / "fix-SUP-1").exists()
 
-    hb = json.loads((env.shared / "runners" / "sai.json").read_text())
+    hb = json.loads((env.shared / "runners" / "sai.json").read_text(encoding="utf-8"))
     assert hb["counts"]["total"]["analyzed"] == 3 and hb["counts"]["total"]["grouped"] == 1
 
 
@@ -144,7 +144,7 @@ def test_unverified_test_is_flagged(env):
     rid = next(m for m in env.outbox().values() if m["kind"] == "approval")["request_id"]
     decide(env, "SUP-1", rid, "approve")
     pipeline.run_once(force=True)
-    gh = [json.loads(l) for l in (env.tmp / "gh.calls.jsonl").read_text().splitlines()]
+    gh = [json.loads(l) for l in (env.tmp / "gh.calls.jsonl").read_text(encoding="utf-8").splitlines()]
     create = next(c for c in gh if c[:2] == ["pr", "create"])
     assert create[create.index("--title") + 1].startswith("⚠ test not verified")
 
@@ -158,9 +158,9 @@ def test_reject_writes_lesson_and_invalid_output_is_not_retried(env):
     pipeline.run_once(force=True)
     st = Store(env.cfg.db_path)
     assert st.ticket("SUP-1")["status"] == "rejected"
-    lesson = (env.shared / "lessons" / "orders__sai.md").read_text()
+    lesson = (env.shared / "lessons" / "orders__sai.md").read_text(encoding="utf-8")
     assert "fix the export" in lesson
-    assert json.loads((env.shared / "inflight" / "SUP-1.json").read_text())["status"] == "abandoned"
+    assert json.loads((env.shared / "inflight" / "SUP-1.json").read_text(encoding="utf-8"))["status"] == "abandoned"
 
     env.add_ticket(ticket("SUP-9", "Another crash", TRACE.replace("12,50", "7,10")))
     env.script(**{"forge-analyst": [{"stdout": "I could not produce JSON, sorry"}]})
@@ -200,7 +200,7 @@ def test_local_only_delivery_without_github_cli(env, monkeypatch):
     from forge import gitwt
     """Default delivery: verified commit on the local branch, nothing pushed, no gh needed.
     A human pushes/merges it; Forge detects the merge with plain git (squash of one commit included)."""
-    team = json.loads((env.shared / "config" / "team.json").read_text())
+    team = json.loads((env.shared / "config" / "team.json").read_text(encoding="utf-8"))
     team.pop("delivery")
     (env.shared / "config" / "team.json").write_text(json.dumps(team))
     monkeypatch.setattr(gitwt, "GH_BIN", "gh-not-installed")  # no GitHub CLI on this laptop
@@ -220,7 +220,7 @@ def test_local_only_delivery_without_github_cli(env, monkeypatch):
     msg = next(m["text"] for m in env.outbox().values() if "Fix ready" in m.get("text", ""))
     assert "git push -u origin forge/SUP-1" in msg and "fails before / passes after ✅" in msg
     wt = env.cfg.worktree_root / "fix-SUP-1"
-    assert "Fails without the fix: yes" in (wt / ".forge" / "PR_BODY.md").read_text()
+    assert "Fails without the fix: yes" in (wt / ".forge" / "PR_BODY.md").read_text(encoding="utf-8")
 
     # the engineer squash-merges it into main by hand
     git(env.repo, "checkout", "-q", "main")
@@ -229,4 +229,4 @@ def test_local_only_delivery_without_github_cli(env, monkeypatch):
     git(env.repo, "push", "-q", "origin", "main")
     pipeline.run_once(force=True)
     assert st.ticket("SUP-1")["status"] == "merged"
-    assert json.loads((env.shared / "inflight" / "SUP-1.json").read_text())["status"] == "merged"
+    assert json.loads((env.shared / "inflight" / "SUP-1.json").read_text(encoding="utf-8"))["status"] == "merged"

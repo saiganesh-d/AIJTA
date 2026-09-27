@@ -7,7 +7,8 @@ import sqlite3
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -60,6 +61,7 @@ class RunResult:
     duration_s: int
     usage: dict
     est_input_tokens: int
+    lookups: list = field(default_factory=list)  # forge-index calls the agent made (MCP modes only)
 
     @property
     def tokens(self) -> int:
@@ -94,11 +96,28 @@ def parse_usage(text: str) -> dict:
     return {k: _num((rx.search(tail) or [None, None])[1]) for k, rx in USAGE_RX.items()}
 
 
-def tokens_today(user_budget_key: str = "") -> int:
+def _tokens_since(day: str) -> int:
     con = _ledger()
     row = con.execute("SELECT COALESCE(SUM(COALESCE(input_tokens, est_input_tokens) + COALESCE(output_tokens,0)),0) "
-                      "FROM calls WHERE day=?", (date.today().isoformat(),)).fetchone()
+                      "FROM calls WHERE day>=?", (day,)).fetchone()
     return int(row[0])
+
+
+def tokens_today() -> int:
+    return _tokens_since(date.today().isoformat())
+
+
+def tokens_this_month() -> int:
+    return _tokens_since(date.today().replace(day=1).isoformat())
+
+
+def check_budget(cfg: Config) -> None:
+    """Hard stop before any Copilot call. Monthly = your Copilot allowance spread over the month."""
+    daily, monthly = cfg.budget("daily_tokens", 400_000), cfg.budget("monthly_tokens", 0)
+    if daily and tokens_today() >= daily:
+        raise BudgetExceeded(f"daily token budget {daily:,} reached")
+    if monthly and tokens_this_month() >= monthly:
+        raise BudgetExceeded(f"monthly token budget {monthly:,} reached")
 
 
 def mcp_config_path() -> Path:
@@ -130,10 +149,7 @@ def write_mcp_config() -> Path:
 def run_agent(cfg: Config, agent: str, prompt: str, cwd: Path, tickets: list[str],
               extra_allow: list[str] | None = None, model: str | None = None,
               context_chars: int = 0, timeout: int = 1200) -> RunResult:
-    members = cfg.team.get("members") or {}
-    budget = (members.get(cfg.user_id) or {}).get("daily_token_budget", 400_000)
-    if tokens_today() >= budget:
-        raise BudgetExceeded(f"daily token budget {budget:,} reached")
+    check_budget(cfg)
 
     prof = PROFILES[agent]
     model = model or cfg.model_for("forge-analyst" if agent == "baseline" else agent)
@@ -164,13 +180,19 @@ def run_agent(cfg: Config, agent: str, prompt: str, cwd: Path, tickets: list[str
 
     est = (len(cmd[cmd.index("-p") + 1]) + context_chars) // 4
     t0 = time.time()
+    run_id = uuid.uuid4().hex[:12]
+    HOME.mkdir(parents=True, exist_ok=True)
+    _current_run().write_text(json.dumps({"run_id": run_id, "agent": agent, "tickets": tickets}), encoding="utf-8")
     try:
         proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
-                              encoding="utf-8", errors="replace")
+                              encoding="utf-8", errors="replace", env={**os.environ, "AI_FORGE_HOME": str(HOME)})
         ok, out, err = proc.returncode == 0, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as e:
         ok, out, err = False, (e.stdout or ""), f"timeout after {timeout}s"
+    finally:
+        _current_run().unlink(missing_ok=True)
     dur = int(time.time() - t0)
+    lookups = collect_lookups(run_id)
     usage = parse_usage(out + "\n" + err)
     con = _ledger()
     con.execute("INSERT INTO calls(day, tickets, agent, model, ok, duration_s, est_input_tokens, input_tokens,"
@@ -179,7 +201,44 @@ def run_agent(cfg: Config, agent: str, prompt: str, cwd: Path, tickets: list[str
                  usage["input"], usage["output"], usage["cached"], cfg.mcp_mode,
                  "\n".join((out + "\n" + err).splitlines()[-25:])))
     con.commit()
-    return RunResult(ok, out, err, dur, usage, est)
+    return RunResult(ok, out, err, dur, usage, est, lookups)
+
+
+# Lookup log: run_agent marks the current call in <home>/current-run.json; the forge-index MCP server
+# (a separate process started by Copilot) appends each tool call to <home>/lookups.jsonl with that run id.
+def _current_run(home: Path | None = None) -> Path:
+    return (home or HOME) / "current-run.json"
+
+
+def _lookups(home: Path | None = None) -> Path:
+    return (home or HOME) / "lookups.jsonl"
+
+
+def log_lookup(home: Path, tool: str, arg: str, symbols: list[str], read: bool) -> None:
+    """Called by the MCP server. `read` = the agent got code bodies (not just a list of names)."""
+    try:
+        run = json.loads(_current_run(home).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return  # not inside a Forge call (e.g. forge doctor)
+    with _lookups(home).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"run_id": run["run_id"], "tool": tool, "arg": str(arg)[:200],
+                             "symbols": symbols[:15], "read": read}) + "\n")
+
+
+def collect_lookups(run_id: str) -> list[dict]:
+    """forge-index lookups the agent made during this call, then clear them from the log."""
+    path = _lookups()
+    if not path.exists():
+        return []
+    mine, rest = [], []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        (mine if rec.get("run_id") == run_id else rest).append(rec)
+    path.write_text("".join(json.dumps(r) + "\n" for r in rest), encoding="utf-8")
+    return mine
 
 
 def extract_json(text: str) -> dict:

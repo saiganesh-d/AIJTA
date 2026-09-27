@@ -80,7 +80,7 @@ def seed_team_folder(cfg: C.Config) -> None:
     team = cfg.shared / "config" / "team.json"
     if not team.exists():
         shutil.copy2(C.ASSETS / "team.example.json", team)
-        print(f"! Created {team} from the example. The team lead must fill models, members and approvers.")
+        print(f"! Created {team} from the example. Fill in jira, models and the test commands.")
     agents = cfg.shared / "agents"
     if not any(agents.glob("forge-*.agent.md")):
         for f in (C.ASSETS / "agents").glob("forge-*.agent.md"):
@@ -90,7 +90,7 @@ def seed_team_folder(cfg: C.Config) -> None:
 
 def run() -> None:
     print("AI Forge setup\n")
-    existing = json.loads(C.LOCAL_CONFIG.read_text()) if C.LOCAL_CONFIG.exists() else {}
+    existing = json.loads(C.LOCAL_CONFIG.read_text(encoding="utf-8")) if C.LOCAL_CONFIG.exists() else {}
     shared = _ask("Shared folder (synced SharePoint 'AI-Forge-Shared')", existing.get("shared_dir") or find_shared_folder())
     if not Path(shared).is_dir():
         raise SystemExit("Shared folder not found. Sync the team SharePoint library first, then rerun.")
@@ -126,7 +126,7 @@ def run() -> None:
 
     problems = C.validate_team(cfg.team, cfg.user_id)
     if problems:
-        print("! team.json needs attention (the lead fixes this once for everyone):")
+        print("! team.json needs attention:")
         for pr in problems:
             print("   -", pr)
     atomic_write(cfg.shared / "runners" / f"{cfg.user_id}.json",
