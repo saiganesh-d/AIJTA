@@ -2,6 +2,7 @@
 /rest/api/3/search/jql, ADF). A `file` mode reads exported issues from a folder, for demos,
 tests and teams whose Jira API is not reachable from laptops."""
 import json
+import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,11 +28,15 @@ def history_jql(scope_jql: str) -> str:
 
 
 def adf_to_text(node) -> str:
-    """Atlassian Document Format (Cloud v3) → plain text. Keeps code blocks and line breaks."""
+    """Atlassian Document Format (Cloud v3) → plain text. Keeps code blocks, links and line breaks."""
     if node is None:
         return ""
     if isinstance(node, str):
         return node
+    if isinstance(node, list):
+        return "".join(adf_to_text(c) for c in node)
+    if not isinstance(node, dict):
+        return str(node)
     t = node.get("type")
     if t == "text":
         return node.get("text", "")
@@ -39,8 +44,10 @@ def adf_to_text(node) -> str:
         return "\n"
     if t == "mention":
         return (node.get("attrs") or {}).get("text", "@user")
+    if t in ("inlineCard", "blockCard"):
+        return (node.get("attrs") or {}).get("url", "")
     inner = "".join(adf_to_text(c) for c in node.get("content", []) or [])
-    if t in ("paragraph", "heading", "blockquote", "listItem"):
+    if t in ("paragraph", "heading", "blockquote", "listItem", "tableRow"):
         return inner + "\n"
     if t == "codeBlock":
         return f"\n```\n{inner}\n```\n"
@@ -58,14 +65,16 @@ class Jira:
     def __init__(self, cfg: C.Config, token: str | None = None, transport=None):
         j = cfg.team.get("jira") or {}
         self.cfg = cfg
-        self.base = j.get("base_url", "").rstrip("/")
-        self.cloud = str(j.get("api_version", "2")) == "3" or j.get("deployment") == "cloud"
+        self.base = (os.environ.get("JIRA_BASE_URL") or j.get("base_url") or "").rstrip("/")
+        self.cloud = (str(j.get("api_version", "2")) == "3" or j.get("deployment") == "cloud"
+                      or "atlassian.net" in self.base.lower())
         self.sprint_field = j.get("sprint_field")
-        token = token if token is not None else C.jira_token(cfg.user_email)
-        auth = (cfg.user_email, token or "") if self.cloud else None
+        self.user_email = C.jira_email(cfg)
+        token = (token if token is not None else C.jira_token(self.user_email) or "").strip()
+        auth = (self.user_email, token) if self.cloud else None
         headers = {"Accept": "application/json"}
         if not self.cloud:
-            headers["Authorization"] = f"Bearer {token or ''}"
+            headers["Authorization"] = f"Bearer {token}"
         self.http = httpx.Client(base_url=self.base, headers=headers, auth=auth, timeout=30, transport=transport,
                                  verify=j.get("verify_tls", True))
         self.requests = 0
@@ -80,23 +89,42 @@ class Jira:
         return self._get(f"/rest/api/{'3' if self.cloud else '2'}/myself")
 
     def search(self, jql: str, max_results: int = 100) -> list[dict]:
-        fields = FIELDS + ([self.sprint_field] if self.sprint_field else [])
-        out = []
+        """Cloud: /rest/api/3/search/jql (nextPageToken; startAt if the site returns `total`). Sites where
+        that endpoint is missing (HTTP 400/404/405) and Server/DC use the classic /search with startAt."""
+        fields = ",".join(FIELDS + ([self.sprint_field] if self.sprint_field else []))
+        out: list[dict] = []
         if self.cloud:
             token = None
-            while True:
-                params = {"jql": jql, "maxResults": max_results, "fields": ",".join(fields)}
-                if token:
-                    params["nextPageToken"] = token
-                data = self._get("/rest/api/3/search/jql", **params)
-                out += data.get("issues", [])
-                token = data.get("nextPageToken")
-                if not token or data.get("isLast"):
+            try:
+                while True:
+                    params = {"jql": jql, "maxResults": max_results, "fields": fields}
+                    if token:
+                        params["nextPageToken"] = token
+                    data = self._get("/rest/api/3/search/jql", **params)
+                    issues = data.get("issues", [])
+                    out += issues
+                    token = data.get("nextPageToken")
+                    if token:
+                        continue
+                    if data.get("isLast") or not issues or "total" not in data:
+                        return out
+                    start = len(out)
+                    while start < data.get("total", 0):
+                        more = self._get("/rest/api/3/search/jql", jql=jql, startAt=start,
+                                         maxResults=max_results, fields=fields).get("issues", [])
+                        if not more:
+                            break
+                        out += more
+                        start += len(more)
                     return out
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in (400, 404, 405):
+                    raise
+                out = []  # fall back to the classic endpoint below
+        path = f"/rest/api/{'3' if self.cloud else '2'}/search"
         start = 0
         while True:
-            data = self._get("/rest/api/2/search", jql=jql, startAt=start, maxResults=max_results,
-                             fields=",".join(fields))
+            data = self._get(path, jql=jql, startAt=start, maxResults=max_results, fields=fields)
             issues = data.get("issues", [])
             out += issues
             start += len(issues)
@@ -105,9 +133,12 @@ class Jira:
 
     def add_comment(self, key: str, text: str) -> None:
         self.requests += 1
+        lines = [line for line in text.split("\n") if line.strip()]
         if self.cloud:
-            body = {"body": {"type": "doc", "version": 1, "content": [
-                {"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in text.split("\n") if line]}}
+            content = [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in lines]
+            if not content:
+                content = [{"type": "paragraph", "content": [{"type": "text", "text": text or " "}]}]
+            body = {"body": {"type": "doc", "version": 1, "content": content}}
             r = self.http.post(f"/rest/api/3/issue/{key}/comment", json=body)
         else:
             r = self.http.post(f"/rest/api/2/issue/{key}/comment", json={"body": text})
@@ -121,43 +152,74 @@ class Jira:
 
     # ---------- normalisation ----------
     def text(self, v) -> str:
-        return adf_to_text(v) if isinstance(v, dict) else (v or "")
+        return adf_to_text(v) if isinstance(v, (dict, list)) else (v or "")
+
+    @staticmethod
+    def _ids(person) -> set:
+        if isinstance(person, dict):
+            return {x for x in (person.get("emailAddress"), person.get("name"), person.get("accountId")) if x}
+        return {str(person)} if person else set()
+
+    @staticmethod
+    def _name(v, key: str = "name"):
+        return v.get(key) if isinstance(v, dict) else v
 
     def normalize(self, issue: dict) -> dict:
+        """Raw REST issue → Forge ticket dict. Tolerates plain strings where Jira usually sends objects,
+        and passes through issues that are already normalised (e.g. from an export script)."""
         f = issue.get("fields") or {}
-        comps = [c.get("name") for c in f.get("components") or [] if c.get("name")]
+        if not f and "summary" in issue:
+            t = dict(issue)
+            for k in ("attachments", "comments", "labels"):
+                t.setdefault(k, [])
+            return t
+        comps = [c.get("name") if isinstance(c, dict) else str(c) for c in f.get("components") or [] if c]
         rep = f.get("reporter") or {}
-        reporter = rep.get("emailAddress") or rep.get("name") or rep.get("accountId") or ""
-        rep_ids = {x for x in (rep.get("emailAddress"), rep.get("name"), rep.get("accountId")) if x}
+        rep_ids = self._ids(rep)
+        reporter = (rep.get("emailAddress") or rep.get("name") or rep.get("accountId") or rep.get("displayName") or ""
+                    ) if isinstance(rep, dict) else str(rep)
+        asg = f.get("assignee") or {}
+        assignee = (asg.get("emailAddress") or asg.get("name") or asg.get("accountId") or asg.get("displayName") or ""
+                    ) if isinstance(asg, dict) else str(asg)
         comments, last_rep = [], None
-        for c in ((f.get("comment") or {}).get("comments") or []):
+        raw_comments = (f.get("comment") or {}).get("comments") or [] if isinstance(f.get("comment"), dict) \
+            else (f.get("comment") or [])
+        for c in raw_comments:
+            if not isinstance(c, dict):
+                continue
             a = c.get("author") or {}
-            is_rep = bool(rep_ids & {a.get("emailAddress"), a.get("name"), a.get("accountId")})
-            comments.append({"author": a.get("displayName") or a.get("name") or "?", "created": c.get("created"),
-                             "by_reporter": is_rep, "body": scrub(self.text(c.get("body")))[:1500]})
-            if is_rep:
+            is_rep = bool(rep_ids & self._ids(a))
+            author = (a.get("displayName") or a.get("name") or "?") if isinstance(a, dict) else str(a)
+            comments.append({"author": author, "created": c.get("created"), "by_reporter": is_rep,
+                             "body": scrub(self.text(c.get("body")))[:1500]})
+            if is_rep and c.get("created"):
                 last_rep = max(filter(None, (last_rep, c.get("created"))))
         atts = []
         for a in f.get("attachment") or []:
+            if not isinstance(a, dict):
+                continue
+            by_rep = bool(rep_ids & self._ids(a.get("author") or {}))
             atts.append({"name": a.get("filename"), "size": a.get("size", 0), "url": a.get("content"),
-                         "created": a.get("created"), "mime": a.get("mimeType", ""),
-                         "by_reporter": bool(rep_ids & {(a.get("author") or {}).get(k) for k in ("emailAddress", "name", "accountId")})})
-            if atts[-1]["by_reporter"]:
+                         "created": a.get("created"), "mime": a.get("mimeType", ""), "by_reporter": by_rep})
+            if by_rep and a.get("created"):
                 last_rep = max(filter(None, (last_rep, a.get("created"))))
         sprint = None
         if self.sprint_field and f.get(self.sprint_field):
             sv = f[self.sprint_field]
             last = sv[-1] if isinstance(sv, list) else sv
             sprint = last.get("name") if isinstance(last, dict) else (re.search(r"name=([^,\]]+)", str(last)) or [None, str(last)])[1]
-        desc = self.text(f.get("description"))
+        status = f.get("status") or {}
+        status_name = self._name(status) or ""
+        status_cat = (status.get("statusCategory") or {}) if isinstance(status, dict) else {}
         return {
-            "key": issue["key"], "summary": f.get("summary") or "", "description": desc,
-            "type": (f.get("issuetype") or {}).get("name"), "labels": f.get("labels") or [],
-            "component": comps[0] if comps else None, "priority": (f.get("priority") or {}).get("name"),
-            "sprint": sprint, "reporter": reporter, "updated": f.get("updated") or "",
-            "jira_status": (f.get("status") or {}).get("name"),
-            "done": ((f.get("status") or {}).get("statusCategory") or {}).get("key") == "done",
-            "fix_versions": [v.get("name") for v in f.get("fixVersions") or []],
+            "key": issue.get("key", ""), "summary": f.get("summary") or "", "description": self.text(f.get("description")),
+            "type": self._name(f.get("issuetype") or {}), "labels": f.get("labels") or [],
+            "component": comps[0] if comps else None, "priority": self._name(f.get("priority") or {}),
+            "sprint": sprint, "reporter": reporter, "assignee": assignee,
+            "project": self._name(f.get("project") or {}, "key"), "created": f.get("created") or "",
+            "updated": f.get("updated") or "", "jira_status": status_name,
+            "done": status_cat.get("key") == "done" or str(status_name).lower() in ("closed", "done", "resolved", "cancelled"),
+            "fix_versions": [self._name(v) for v in f.get("fixVersions") or []],
             "attachments": atts, "comments": comments, "last_reporter_activity": last_rep,
         }
 
@@ -259,13 +321,17 @@ def sync(cfg: C.Config, store, jira, log=print) -> dict:
     stats = {"new": 0, "updated": 0, "reentered": 0, "history": 0, "closed": 0}
     started = datetime.now().isoformat(timespec="seconds")
     last = store.get_state("mine_last")
-    scope = (cfg.team.get("jira") or {}).get("scope_jql", "")
+    scope = ((cfg.team.get("jira") or {}).get("scope_jql") or "").strip()
     if isinstance(jira, FileJira):
         issues = [jira.normalize(i) for i in jira.mine(last)]
     else:
         # assigned_to_me: false → every ticket matching scope_jql (e.g. a trial on a project's open tickets)
-        mine = " AND assignee = currentUser()" if (cfg.team.get("jira") or {}).get("assigned_to_me", True) else ""
-        jql = f"({scope}){mine}" + (f' AND updated >= "{jql_time(last)}"' if last else "")
+        parts = [f"({scope})"] if scope else []
+        if (cfg.team.get("jira") or {}).get("assigned_to_me", True):
+            parts.append("assignee = currentUser()")
+        if last:
+            parts.append(f'updated >= "{jql_time(last)}"')
+        jql = " AND ".join(parts) or "created is not null"
         issues = [jira.normalize(i) for i in jira.search(jql + " ORDER BY updated ASC")]
     for t in issues:
         old = store.ticket(t["key"])
@@ -288,7 +354,10 @@ def sync(cfg: C.Config, store, jira, log=print) -> dict:
         if isinstance(jira, FileJira):
             team = [jira.normalize(i) for i in jira.team(hist_last)]
         else:
-            jql = history_jql(scope) + (f' AND updated >= "{jql_time(hist_last)}"' if hist_last else "")
+            parts = [f"({history_jql(scope)})"] if scope else []
+            if hist_last:
+                parts.append(f'updated >= "{jql_time(hist_last)}"')
+            jql = " AND ".join(parts) or "created is not null"
             team = [jira.normalize(i) for i in jira.search(jql)]
         for t in team:
             t["signature"] = error_signature(t.get("description", ""))

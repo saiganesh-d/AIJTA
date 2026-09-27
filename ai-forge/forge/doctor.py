@@ -68,8 +68,8 @@ def run(live: bool = False) -> None:
         from .jira import FileJira
         ok &= _check(f"Jira file mode ({FileJira(cfg).dir})", FileJira(cfg).dir.is_dir(), "create the export folder")
     else:
-        token = C.jira_token(cfg.user_email)
-        ok &= _check("Jira token in keychain", bool(token), "forge setup")
+        token = C.jira_token(C.jira_email(cfg))
+        ok &= _check("Jira token (.env JIRA_API_TOKEN or keychain)", bool(token), "forge setup, or JIRA_API_TOKEN in .env")
         if token and j.get("base_url"):
             from .jira import Jira
             try:

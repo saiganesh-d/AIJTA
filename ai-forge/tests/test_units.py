@@ -340,3 +340,56 @@ def test_assigned_to_me_false_takes_all_scope_tickets(env):
     assert "currentUser" not in seen[0] and st.ticket("ABC-1")
     idx = Index(env.cfg.index_db, env.cfg.repo_path)
     assert triage.route(cfg, idx, {**ticket("ABC-1", "x", TRACE), "type": "Story"}, [])[0] == "ready"  # no type filter
+
+
+def test_cloud_search_falls_back_to_classic_endpoint(env):
+    cfg = _cfg(env, base_url="https://acme.atlassian.net")  # no api_version: Cloud detected from the URL
+    paths = []
+
+    def handler(req):
+        paths.append(req.url.path)
+        if req.url.path.endswith("/search/jql"):
+            return httpx.Response(404, json={})
+        return httpx.Response(200, json={"issues": [_issue("SUP-1")], "total": 1})
+
+    j = Jira(cfg, "tok", transport=httpx.MockTransport(handler))
+    assert j.cloud and [i["key"] for i in j.search("x")] == ["SUP-1"]
+    assert paths == ["/rest/api/3/search/jql", "/rest/api/3/search"]
+
+
+def test_env_file_values_for_jira(env, monkeypatch, tmp_path):
+    for k in ("JIRA_API_TOKEN", "JIRA_TOKEN", "JIRA_PAT", "JIRA_EMAIL", "JIRA_BASE_URL"):
+        monkeypatch.delenv(k, raising=False)
+    f = tmp_path / ".env"
+    f.write_text('# comment\nJIRA_API_TOKEN="  abc123 "\nJIRA_EMAIL=me@acme.test\nJIRA_BASE_URL=https://acme.atlassian.net/\n')
+    C.load_env_file(f)
+    j = Jira(_cfg(env, base_url="https://ignored.example"))
+    assert j.base == "https://acme.atlassian.net" and j.user_email == "me@acme.test" and j.cloud
+    assert j.http.auth is not None and C.jira_token("x") == "  abc123 "  # stripped when used by the client
+
+
+def test_normalize_tolerates_strings_and_passthrough(env):
+    j = Jira(_cfg(env), "tok")
+    t = j.normalize({"key": "SUP-9", "fields": {
+        "summary": "s", "components": ["billing"], "reporter": "cust", "assignee": {"emailAddress": "a@x"},
+        "status": "Closed", "issuetype": "Bug", "priority": "High", "project": {"key": "SUP"},
+        "comment": [{"author": "cust", "created": "2026-01-02", "body": {"type": "doc", "content": [
+            {"type": "paragraph", "content": [{"type": "inlineCard", "attrs": {"url": "https://x/1"}}]}]}}],
+        "updated": "u"}})
+    assert (t["component"], t["type"], t["priority"], t["project"], t["assignee"]) == ("billing", "Bug", "High", "SUP", "a@x")
+    assert t["done"] and t["comments"][0]["by_reporter"] and "https://x/1" in t["comments"][0]["body"]
+    assert t["last_reporter_activity"] == "2026-01-02"
+    already = {"key": "SUP-1", "summary": "x", "updated": "u"}
+    assert j.normalize(already)["attachments"] == []
+
+
+def test_empty_scope_jql_still_valid(env):
+    cfg = _cfg(env, scope_jql="", assigned_to_me=False)
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.params["jql"])
+        return httpx.Response(200, json={"issues": [], "total": 0})
+
+    sync(cfg, Store(env.home / "t.db"), Jira(cfg, "tok", transport=httpx.MockTransport(handler)), log=lambda *_: None)
+    assert seen == ["created is not null ORDER BY updated ASC", "created is not null"]

@@ -10,6 +10,34 @@ ASSETS = Path(__file__).parent / "assets"
 KEYRING_SERVICE = "ai-forge-jira"
 
 
+def load_env_file(path: Path | None = None) -> None:
+    """Load KEY=VALUE lines from a .env file into os.environ (never overrides variables already set).
+    Looks in the current folder, ~/.ai-forge/.env, then ~/.env. Supported keys: JIRA_BASE_URL,
+    JIRA_EMAIL, JIRA_API_TOKEN (or JIRA_TOKEN / JIRA_PAT)."""
+    if path is None:
+        for c in (Path(".env"), HOME / ".env", Path.home() / ".env"):
+            if c.is_file():
+                path = c
+                break
+    if not path or not path.is_file():
+        return
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = (x.strip() for x in line.split("=", 1))
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                v = v[1:-1]
+            if k:
+                os.environ.setdefault(k, v)
+    except Exception:
+        pass
+
+
+load_env_file()
+
+
 @dataclass
 class Config:
     user_id: str                 # short id used in shared files, e.g. "sai"
@@ -132,10 +160,26 @@ def save(cfg: Config) -> None:
 
 
 def jira_token(email: str) -> str | None:
-    import keyring
-    return keyring.get_password(KEYRING_SERVICE, email)
+    """Environment (.env) first, then the OS keychain. A keychain that is unavailable is not fatal."""
+    env_token = os.environ.get("JIRA_API_TOKEN") or os.environ.get("JIRA_TOKEN") or os.environ.get("JIRA_PAT")
+    if env_token:
+        return env_token
+    try:
+        import keyring
+        return keyring.get_password(KEYRING_SERVICE, email)
+    except Exception:
+        return None
 
 
 def set_jira_token(email: str, token: str) -> None:
-    import keyring
-    keyring.set_password(KEYRING_SERVICE, email, token)
+    try:
+        import keyring
+        keyring.set_password(KEYRING_SERVICE, email, token)
+    except Exception:
+        pass
+    os.environ["JIRA_API_TOKEN"] = token
+
+
+def jira_email(cfg: "Config") -> str:
+    """The Jira login: JIRA_EMAIL (.env) overrides the Forge user email."""
+    return (os.environ.get("JIRA_EMAIL") or cfg.user_email or (cfg.team.get("jira") or {}).get("email", "")).strip()

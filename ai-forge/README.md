@@ -45,6 +45,18 @@ Every step that can be done without Copilot is done without it; see `PLAN.md` §
 | Delivery | **Local only** (`delivery.push: false`): an approved fix becomes a verified commit on the local branch `forge/<KEY>`; the engineer reviews and pushes it. Teams gets the branch, commit and a ready PR description (`.forge/PR_BODY.md`). Merges are detected with plain git, squash merges included |
 | Security sign-off | Pending: confirm Copilot CLI use on this repo and the SharePoint folder with IT before the pilot |
 
+## Jira connection: keychain or `.env`
+The Jira token normally lives in the OS keychain (`forge setup`). Alternatively put a `.env` file in
+`%USERPROFILE%\.ai-forge\` (or the folder you run `forge` from, or your home folder):
+```
+JIRA_BASE_URL=https://yourorg.atlassian.net
+JIRA_EMAIL=you@yourorg.com
+JIRA_API_TOKEN=your-api-token
+```
+Values from the environment win over `team.json` / the keychain. `*.atlassian.net` is treated as Cloud
+automatically. If `/rest/api/3/search/jql` isn't available on your site, Forge falls back to the classic
+`/search` endpoint. `.env` is git-ignored; never put it in the shared folder (it holds your token in plain text).
+
 ## Trial on normal open tickets (no support tickets yet)
 In `team.json → jira`:
 ```json
