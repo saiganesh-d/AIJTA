@@ -131,10 +131,14 @@ def _run(force: bool) -> dict:
     def stage(name, fn, needs=()):
         """Isolate every step: log, report in the heartbeat, keep going. Skip steps whose inputs failed."""
         if any(n not in done for n in needs):
+            log(f"stage {name} skipped: needs {', '.join(n for n in needs if n not in done)}")
             return None
+        log(f"stage {name} starting")
         try:
             results[name] = fn()
             done.append(name)
+            if name not in ("open_index", "jira_client"):  # objects, not results
+                log(f"stage {name} done: {results[name]}")
             return results[name]
         except Exception as e:
             errors[name] = f"{e.__class__.__name__}: {e}"[:300]
@@ -152,10 +156,15 @@ def _run(force: bool) -> dict:
         # fetch every branch so analysis and fixes start from the latest remote state; a failed fetch
         # is reported and the run continues on the last fetched origin/main
         stage("fetch", lambda: gitwt.fetch(cfg.repo_path))
+        log(f"indexing {cfg.repo_path} @ {cfg.base_ref} ...")
         stats = stage("index", lambda: index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db, fetch=False,
-                                                  log=lambda *_: None))
+                                                  log=lambda *_: None, ext_map=cfg.index_ext()))
+        if stats:
+            log(f"index ready: {stats['files_reindexed']}/{stats['files_total']} files re-parsed, "
+                f"{stats['symbols_added']} symbols")
         if stats and (stats["files_reindexed"] or not cfg.repo_map.exists()):
             build_repo_map(cfg.index_db, cfg.repo_map)
+            log("repo map updated")
         if cfg.ctx("git_ticket_map"):  # ticket → files from commit messages; only new commits are read
             stage("ticket_map", lambda: sync_ticket_map(cfg.repo_path, cfg.base_ref, cfg.index_db), needs=("index",))
         if stats or cfg.index_db.exists():  # a stale index is still better than no run

@@ -40,7 +40,7 @@ def main() -> None:
         from . import config as C
         from .index.indexer import build_repo_map, index_repo
         cfg = C.load()
-        index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db, full=a.full)
+        index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db, full=a.full, ext_map=cfg.index_ext())
         build_repo_map(cfg.index_db, cfg.repo_map)
         print(f"repo map: {cfg.repo_map}")
     elif a.cmd == "mcp":

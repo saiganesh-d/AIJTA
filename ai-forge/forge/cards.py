@@ -101,12 +101,29 @@ def send_approval(cfg: C.Config, store, g: dict, tokens: int, regression: dict |
     return _post_with_id(cfg, store, rid, keys[0], "approval", card, {"tickets": keys, "group": g})
 
 
+ELSEWHERE_PHRASES = ("not in this repo", "does not exist in this repo", "different repository", "another repository",
+                     "other repository", "outside this repo")
+INFO_SUBTITLES = {"configuration": "configuration, no code change", "environment": "environment / infrastructure",
+                  "data_issue": "data problem, code works as designed", "user_error": "usage question or expected behaviour",
+                  "duplicate": "likely already fixed or already known"}
+
+
+def info_subtitle(g: dict) -> str:
+    """One line saying what kind of non-code result this is, instead of 'not a code change' for everything."""
+    res = g.get("non_code_resolution") or {}
+    text = " ".join(str(x or "") for x in (g.get("root_cause"), res.get("what"), res.get("where"))).lower()
+    if g.get("code_elsewhere") or any(p in text for p in ELSEWHERE_PHRASES):
+        return "may be a code bug, but not in this repository"
+    return INFO_SUBTITLES.get(g.get("classification"), "non-code or external follow-up")
+
+
 def send_info(cfg: C.Config, store, g: dict, tokens: int) -> str:
     keys = g["tickets"]
     res = g.get("non_code_resolution") or {}
     rid = new_request_id()
     card = render("info", {
         "title": scrub(g.get("_summary") or keys[0]), "ticketLinks": ticket_links(cfg, keys),
+        "infoSubtitle": info_subtitle(g),
         "classification": g.get("classification"), "where": res.get("where", "-"), "owner": res.get("owner", "-"),
         "confidence": f"{g.get('confidence', 0):.0%}", "what": res.get("what") or g.get("root_cause", ""),
         "steps": _steps(res.get("steps")) + f"\n\nCost: {tokens:,} tokens", "ticketUrl": ticket_url(cfg, keys[0]),
@@ -119,6 +136,7 @@ def send_duplicate(cfg: C.Config, store, t: dict, match: dict) -> str:
     rid = new_request_id()
     card = render("info", {
         "title": f"{t['key']} looks like a duplicate of {match['key']}", "ticketLinks": ticket_links(cfg, [t["key"]]),
+        "infoSubtitle": "likely already fixed or already known",
         "classification": "duplicate (no Copilot call)", "where": a.get("pr_url") or f"commit {f['fix_commit']}",
         "owner": a.get("owner", "-"), "confidence": "same error signature",
         "what": f"{match['key']}: {a.get('root_cause') or a.get('summary', '')}",

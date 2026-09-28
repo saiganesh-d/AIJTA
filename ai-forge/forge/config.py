@@ -85,6 +85,13 @@ class Config:
     def threshold(self, key: str, default):
         return (self.team.get("thresholds") or {}).get(key, default)
 
+    def index_ext(self) -> dict:
+        """team.json → index: extra file types, {".ext": language} for code and a list for config files."""
+        ix = self.team.get("index") or {}
+        out = {e.lower(): lang for e, lang in (ix.get("code_ext") or {}).items()}
+        out.update({e.lower(): "config" for e in ix.get("config_ext") or []})
+        return out
+
     def ctx(self, key: str):
         """team.json → context: what goes into the pack Copilot gets (see CONTEXT_DEFAULTS)."""
         return (self.team.get("context") or {}).get(key, CONTEXT_DEFAULTS[key])
@@ -137,6 +144,8 @@ CONTEXT_DEFAULTS = {
     "past_evidence_min_score": 0.5,  # same file or stronger (see min_past_score tiers)
     "past_evidence_max_blocks": 2,
     "learn_gaps": True,              # record code Copilot needed that the pack missed (forge gaps)
+    "attachment_files": True,        # raw attachments in .forge/attachments; Copilot opens them only when needed
+    "attachment_files_max_mb": 10,   # per file; larger ones are listed but not copied
 }
 REQUIRED_MODELS = ("forge-doctor", "forge-config", "forge-analyst", "forge-fixer", "forge-adapter")
 

@@ -26,7 +26,7 @@ DEFAULT_NEEDS_INFO = ("Thanks for the report. To analyse this we need a bit more
 
 # ---------------- text helpers ----------------
 def full_text(t: dict) -> str:
-    rep = "\n".join(c["body"] for c in t.get("comments", []) if c.get("by_reporter"))
+    rep = "\n".join(c["body"] for c in t.get("comments", []))  # all comments: repro steps often come from support
     atts = "\n".join(a.get("text", "") for a in t.get("attachments", []))
     return f"{t.get('summary', '')}\n{t.get('description', '')}\n{rep}\n{atts}"
 
@@ -237,7 +237,7 @@ def route(cfg: C.Config, idx: Index, t: dict, matches: list[dict]) -> tuple[str,
         return "skipped", "", f"issue type '{t.get('type')}' is not a support type"
 
     text = full_text(t)
-    body = (t.get("description") or "").strip() + "".join(c["body"] for c in t.get("comments", []) if c.get("by_reporter"))
+    body = (t.get("description") or "").strip() + "".join(c["body"] for c in t.get("comments", []))
     has_att = any(a.get("text") for a in t.get("attachments", []))
     frames = parse_frames(text)
     if len(body) < MIN_DESCRIPTION and not has_att and not frames:

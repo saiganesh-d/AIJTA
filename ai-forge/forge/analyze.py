@@ -1,8 +1,10 @@
 """Analysis of ticket groups by Copilot agents (PLAN §5.11): one call per group in the normal path."""
 import json
 import re
+import shutil
 import traceback
 from datetime import date, datetime
+from pathlib import Path
 
 import jsonschema
 
@@ -119,10 +121,57 @@ def check_citations(idx: Index, entry: dict) -> list[str]:
     return bad
 
 
+def stage_attachments(cfg: C.Config, tickets: list[dict], wt) -> list[dict]:
+    """Copy the raw ticket attachments into .forge/attachments/<KEY>/ and list them in job.json. Their text
+    (scrubbed, trimmed) is already in context.md; the raw files are for when that is not enough, e.g. a
+    screenshot or a table in a PDF. Copilot reads a file only when it decides to, so an unneeded attachment
+    costs no tokens. Raw files are NOT scrubbed: switch off with team.json → context.attachment_files."""
+    if not cfg.ctx("attachment_files"):
+        return []
+    cap = int(float(cfg.ctx("attachment_files_max_mb")) * 1024 * 1024)
+    listed = []
+    for t in tickets:
+        for a in t.get("attachments") or []:
+            src = Path(a["local_path"]) if a.get("local_path") else None
+            entry = {"ticket": t["key"], "name": a.get("name"), "mime": a.get("mime"), "size": a.get("size")}
+            if src and src.is_file() and src.stat().st_size <= cap:
+                dst = wt / ".forge" / "attachments" / t["key"] / src.name
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                entry["path"] = dst.relative_to(wt).as_posix()
+            else:
+                entry["path"] = None  # not downloaded or over the size limit: only its description is available
+            listed.append(entry)
+    return listed
+
+
+# Labels models use for the allowed classifications; repaired locally instead of failing (never re-ask).
+CLASSIFICATION_SYNONYMS = {
+    "usage": "user_error", "how_to": "user_error", "question": "user_error", "user": "user_error",
+    "bug": "code_bug", "code": "code_bug", "defect": "code_bug",
+    "config": "configuration", "misconfiguration": "configuration",
+    "env": "environment", "infrastructure": "environment", "infra": "environment",
+    "data": "data_issue", "dup": "duplicate", "insufficient_info": "needs_info", "more_info": "needs_info",
+}
+
+
+def normalize_output(out):
+    """Repair common label variants before schema validation (a failed analysis would waste its tokens)."""
+    if not isinstance(out, dict) or not isinstance(out.get("groups"), list):
+        return out
+    groups = []
+    for g in out["groups"]:
+        if isinstance(g, dict) and isinstance(g.get("classification"), str):
+            label = g["classification"].strip().lower().replace("-", "_").replace(" ", "_")
+            g = {**g, "classification": CLASSIFICATION_SYNONYMS.get(label, label)}
+        groups.append(g)
+    return {**out, "groups": groups}
+
+
 def _call(cfg, agent, wt, keys, pack_len, model=None) -> tuple[dict | None, object, str | None]:
     res = run_agent(cfg, agent, PROMPT, wt, keys, model=model, context_chars=pack_len)
     try:
-        out = extract_json(res.stdout)
+        out = normalize_output(extract_json(res.stdout))
     except ValueError as e:
         return None, res, str(e)
     return out, res, _validate(out)
@@ -173,6 +222,7 @@ def _analyze_one(cfg, store, idx, jira, g, stats, log) -> None:
     wt = gitwt.worktree_add(cfg.repo_path, cfg.worktree_root / f"analyze-{gid}", cfg.base_ref)
     analyzed_commit = gitwt.out(wt, "rev-parse", "HEAD")[:12]  # the fixer compares against this later
     try:
+        job["attachment_files"] = stage_attachments(cfg, tickets, wt)
         (wt / ".forge" / "job.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
         (wt / ".forge" / "context.md").write_text(pack, encoding="utf-8")
         if cfg.repo_map.exists():
@@ -247,7 +297,8 @@ def _publish(cfg, store, idx, jira, tickets, out, agent, model, tok, matches, lo
                   "tokens": {"input": tok["input"], "output": tok["output"], "estimated": tok["estimated"]}}
         now = datetime.now().isoformat(timespec="seconds")
 
-        if cls == "code_bug" and conf >= cfg.threshold("min_confidence_for_fix_card", 0.5):
+        elsewhere = bool(entry.get("code_elsewhere"))  # code bug outside this repo: nothing to fix here → info card
+        if cls == "code_bug" and not elsewhere and conf >= cfg.threshold("min_confidence_for_fix_card", 0.5):
             reg = next((m for m in matches if m["regression"]), None)
             regression = ({"key": entry["regression_of"], "note": "flagged by the analyst"} if entry.get("regression_of")
                           else {"key": reg["key"], "note": reg["line"]} if reg else None)
@@ -263,7 +314,7 @@ def _publish(cfg, store, idx, jira, tickets, out, agent, model, tok, matches, lo
             conflicts.write_inflight(cfg, keys[0], status="planned", branch=None, base_commit=cards._base_commit(cfg),
                                      planned_symbols=common["affected_symbols"],
                                      changed_files=common["affected_files"])
-        elif cls in ("code_bug", "needs_info"):
+        elif cls == "needs_info" or (cls == "code_bug" and not elsewhere):
             qs = entry.get("questions_for_reporter") or []
             for k in keys:
                 cards.write_analysis(cfg, by_key[k], {**common, "classification": "needs_info", "status": "needs_info"})

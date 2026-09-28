@@ -1,10 +1,12 @@
 """Jira sync (PLAN §5.3). Server/DC (Bearer PAT, /rest/api/2/search) and Cloud (basic email+token,
 /rest/api/3/search/jql, ADF). A `file` mode reads exported issues from a folder, for demos,
 tests and teams whose Jira API is not reachable from laptops."""
+import io
 import json
 import os
 import re
 from datetime import datetime, timedelta
+from mimetypes import guess_type
 from pathlib import Path
 
 import httpx
@@ -14,7 +16,7 @@ from .signals import error_signature, scrub, trim_log
 
 TEXT_EXT = {".log", ".txt", ".json", ".xml", ".yaml", ".yml", ".csv", ".out", ".err", ".trace", ".properties",
             ".ini", ".conf", ".cfg", ".md", ".stack", ".html"}
-MAX_ATTACHMENT = 2 * 1024 * 1024
+MAX_ATTACHMENT = 10 * 1024 * 1024  # default; team.json → jira.max_attachment_mb
 FIELDS = ["summary", "description", "issuetype", "labels", "components", "priority", "attachment", "comment",
           "updated", "status", "reporter", "fixVersions", "assignee"]
 STATUS_CLAUSE = re.compile(
@@ -144,11 +146,11 @@ class Jira:
             r = self.http.post(f"/rest/api/2/issue/{key}/comment", json={"body": text})
         r.raise_for_status()
 
-    def download(self, url: str) -> bytes:
+    def download(self, url: str, limit: int = MAX_ATTACHMENT) -> bytes:
         self.requests += 1
         r = self.http.get(url, follow_redirects=True)
         r.raise_for_status()
-        return r.content[:MAX_ATTACHMENT]
+        return r.content[:limit]
 
     # ---------- normalisation ----------
     def text(self, v) -> str:
@@ -273,30 +275,62 @@ def client(cfg: C.Config):
     return FileJira(cfg) if (cfg.team.get("jira") or {}).get("mode") == "file" else Jira(cfg)
 
 
-def fetch_attachments(jira, t: dict, dest_root: Path) -> list[tuple[str, str]]:
-    """Download text-like attachments (≤2 MB), keep only trimmed + scrubbed text. Images/binaries by name."""
+def max_attachment(cfg: C.Config | None) -> int:
+    """team.json → jira.max_attachment_mb (default 10). Larger attachments are listed, not downloaded."""
+    mb = ((cfg.team.get("jira") or {}) if cfg else {}).get("max_attachment_mb", MAX_ATTACHMENT // (1024 * 1024))
+    return int(float(mb) * 1024 * 1024)
+
+
+def fetch_attachments(jira, t: dict, dest_root: Path, limit: int = MAX_ATTACHMENT) -> list[dict]:
+    """Download every attachment up to `limit` bytes into ~/.ai-forge/attachments/<KEY>/ (local only).
+    Returns [{name, mime, size, text, local_path}]: `text` is what goes into the context pack, always
+    trimmed + scrubbed (text files decoded, PDFs extracted with pypdf, images/binaries a placeholder);
+    `local_path` is the raw file, which analysis can hand to Copilot on demand (context.attachment_files)."""
     out = []
     for a in t.get("attachments", []):
         name = a.get("name") or "attachment"
-        if "text" in a:  # file mode / already fetched
-            out.append((name, a["text"]))
+        if "text" in a and ("local_path" in a or not a.get("url")):  # already fetched / file mode
+            out.append({**a, "name": name})
             continue
-        ext = Path(name).suffix.lower()
-        if ext not in TEXT_EXT or (a.get("size") or 0) > MAX_ATTACHMENT or not a.get("url"):
-            out.append((name, f"(binary or large attachment, {a.get('size', 0)} bytes, not downloaded)"))
+        mime = (a.get("mime") or guess_type(name)[0] or "application/octet-stream").lower()
+        size = a.get("size") or 0
+        if size > limit or not a.get("url"):
+            out.append({"name": name, "mime": mime, "size": size,
+                        "text": f"(attachment present: {mime}, {size} bytes, not downloaded: over the size limit)"})
             continue
         d = dest_root / t["key"]
         d.mkdir(parents=True, exist_ok=True)
-        cached = d / (re.sub(r"[^\w.-]", "_", name) + ".trimmed.txt")
-        if not cached.exists():
+        safe = re.sub(r"[^\w.-]", "_", name)
+        cached, blob_path = d / (safe + ".trimmed.txt"), d / safe
+        if not cached.exists() or not blob_path.exists():
             try:
-                raw = jira.download(a["url"]).decode("utf-8", errors="replace")
+                blob = jira.download(a["url"], limit)
             except httpx.HTTPError as e:
-                out.append((name, f"(download failed: {e.__class__.__name__})"))
+                out.append({"name": name, "mime": mime, "size": size,
+                            "text": f"(download failed: {e.__class__.__name__})"})
                 continue
-            cached.write_text(trim_log(scrub(raw)), encoding="utf-8")
-        out.append((name, cached.read_text(encoding="utf-8")))
+            blob_path.write_bytes(blob)
+            cached.write_text(trim_log(scrub(attachment_text(blob, name, mime))), encoding="utf-8")
+        out.append({"name": name, "mime": mime, "size": size, "text": cached.read_text(encoding="utf-8"),
+                    "local_path": str(blob_path)})
     return out
+
+
+def attachment_text(blob: bytes, name: str, mime: str) -> str:
+    """Text for the context pack. Text files decoded, PDFs extracted (pypdf), others described."""
+    ext = Path(name).suffix.lower()
+    if ext in TEXT_EXT or mime.startswith("text/") or mime in {"application/json", "application/xml"}:
+        return blob.decode("utf-8", errors="replace")
+    if ext == ".pdf" or mime == "application/pdf":
+        try:
+            from pypdf import PdfReader
+            text = "\n".join((page.extract_text() or "") for page in PdfReader(io.BytesIO(blob)).pages)
+            return text or f"(pdf attachment {name} had no extractable text, e.g. a scanned document)"
+        except Exception as e:  # pypdf missing or a damaged PDF: never break the sync
+            return f"(pdf attachment {name} could not be parsed: {e.__class__.__name__})"
+    if mime.startswith("image/"):
+        return f"(image attachment {name}, {mime}: raw file available to the analyst; no OCR)"
+    return f"(binary attachment {name}, {mime}: not converted to text)"
 
 
 def ticket_text(t: dict) -> str:
@@ -310,8 +344,16 @@ CLOSABLE = {"new", "cooling", "ready", "needs_info", "awaiting_decision", "info_
 REENTER = {"needs_info", "skipped", "duplicate", "resolved", "info_sent", "rejected", "analyze_failed"}
 
 
+def allow_closed_eval(cfg: C.Config) -> bool:
+    """Evaluation on closed tickets (no live support tickets yet): tickets closed in Jira are NOT auto-resolved.
+    AI_FORGE_ALLOW_CLOSED_EVAL=1 or team.json → jira.allow_closed_for_eval. Keep it off in normal use."""
+    if os.environ.get("AI_FORGE_ALLOW_CLOSED_EVAL", "").strip().lower() in {"1", "true", "yes", "on", "y"}:
+        return True
+    return bool((cfg.team.get("jira") or {}).get("allow_closed_for_eval", False))
+
+
 def _prepare(jira, t: dict, cfg: C.Config) -> dict:
-    t["attachments"] = [{"name": n, "text": x} for n, x in fetch_attachments(jira, t, C.HOME / "attachments")]
+    t["attachments"] = fetch_attachments(jira, t, C.HOME / "attachments", max_attachment(cfg))
     t["signature"] = error_signature(f"{t.get('description', '')}\n" + "\n".join(a["text"] for a in t["attachments"]))
     return t
 
@@ -319,6 +361,7 @@ def _prepare(jira, t: dict, cfg: C.Config) -> dict:
 def sync(cfg: C.Config, store, jira, log=print) -> dict:
     """Pull my changed tickets (every run) and team history (hourly). Returns counts."""
     stats = {"new": 0, "updated": 0, "reentered": 0, "history": 0, "closed": 0}
+    closed_eval = allow_closed_eval(cfg)
     started = datetime.now().isoformat(timespec="seconds")
     last = store.get_state("mine_last")
     scope = ((cfg.team.get("jira") or {}).get("scope_jql") or "").strip()
@@ -363,7 +406,7 @@ def sync(cfg: C.Config, store, jira, log=print) -> dict:
             t["signature"] = error_signature(t.get("description", ""))
             stats["history"] += store.upsert_history(t)
             mine = store.ticket(t["key"])
-            if t.get("done") and mine and mine["status"] in CLOSABLE:
+            if t.get("done") and mine and mine["status"] in CLOSABLE and not closed_eval:
                 store.set_status(t["key"], "resolved", "closed in Jira")
                 store.close_requests_for(t["key"])
                 stats["closed"] += 1

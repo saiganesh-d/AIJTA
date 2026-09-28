@@ -73,7 +73,28 @@ In `team.json → jira`:
 ```
 Empty type/label lists switch off the "not a support ticket" skip rule; `assigned_to_me: false` takes every
 ticket matching `scope_jql`, not only yours. Keep the JQL narrow: each analysed ticket costs Copilot tokens
-(the daily `daily_token_budget` stops it at the limit).
+(`budget.daily_tokens` / `monthly_tokens` stop it at the limit).
+
+To evaluate on **closed** tickets, set `jira.allow_closed_for_eval: true` (or `AI_FORGE_ALLOW_CLOSED_EVAL=1`):
+tickets closed in Jira are then analysed instead of being marked resolved. Switch it off for normal use.
+
+## Attachments
+Every attachment up to `jira.max_attachment_mb` (default 10) is downloaded to `~/.ai-forge/attachments/<KEY>/`
+(local only). Text files and PDFs (via `pypdf`) become **scrubbed, trimmed** text in the context pack; images
+and other binaries are described by name and type. The raw files are also copied into the analysis worktree
+(`.forge/attachments/`, listed in `job.json`) so Copilot can open a screenshot or the full PDF **only when the
+text is not enough**: an attachment it doesn't open costs no tokens. Raw files are not scrubbed; turn this off
+with `context.attachment_files: false` if your data rules require it.
+
+## File types in the code index
+Built in: common languages, config files, and Vector CANoe: `.can`/`.cin`/`.capl` are parsed as code (C grammar),
+`.vsysvar`, `.xvp`, `.vsme`, `.sil`, `.xsd`, `.xsl(t)` as config. Add your own in `team.json → index`:
+`"code_ext": {".sin": "c"}`, `"config_ext": [".varsys"]`. Changing a type re-indexes those files on the next run.
+
+## Result labels on info cards
+Non-code results say what they are (configuration, environment, data, usage, already known). When the fault is
+probably in code **outside this repository**, the agent sets `code_elsewhere` and the card says so, with the likely
+owner, instead of offering a fix here.
 
 ## Demo without Jira access
 Set `"jira": {"mode": "file", "path": "<folder>"}` in `team.json` and drop ticket JSON files into that folder

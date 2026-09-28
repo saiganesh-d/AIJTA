@@ -218,7 +218,7 @@ def baseline(cfg: C.Config, tickets_dir: Path, with_fix: bool = True, log=print)
             gitwt.worktree_remove(cfg.repo_path, wt)
         # (b) Forge
         db = C.HOME / "index" / f"baseline-{ref.replace('/', '_')}.db"
-        index_repo(cfg.repo_path, ref, db, fetch=False, log=lambda *_: None)
+        index_repo(cfg.repo_path, ref, db, fetch=False, log=lambda *_: None, ext_map=cfg.index_ext())
         idx = Index(db, cfg.repo_path)
         t["signature"] = None
         status, route, _ = triage.route(cfg, idx, t, [])

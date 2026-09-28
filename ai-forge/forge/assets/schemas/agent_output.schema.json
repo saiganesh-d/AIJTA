@@ -24,7 +24,8 @@
           "risk": {"enum": ["low", "medium", "high"]},
           "confidence": {"type": "number", "minimum": 0, "maximum": 1},
           "questions_for_reporter": {"type": "array", "items": {"type": "string"}},
-          "escalate_to_analyst": {"type": "boolean"}
+          "escalate_to_analyst": {"type": "boolean"},
+          "code_elsewhere": {"type": "boolean"}
         }
       }
     }

@@ -23,7 +23,7 @@ from .store import Store
 
 
 def check_retrieval(cfg: C.Config, tickets_dir: Path, log=print) -> Path:
-    index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db, fetch=False, log=lambda *_: None)
+    index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db, fetch=False, log=lambda *_: None, ext_map=cfg.index_ext())
     if cfg.ctx("git_ticket_map"):
         sync_ticket_map(cfg.repo_path, cfg.base_ref, cfg.index_db)
     idx, store = Index(cfg.index_db, cfg.repo_path), Store(cfg.db_path)

@@ -4,6 +4,7 @@ Indexes the *base branch* (e.g. origin/main) straight from git objects, so it ne
 depends on the state of anyone's working copy. Only changed blobs are re-parsed."""
 import ast
 import subprocess
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
@@ -16,7 +17,12 @@ LANG_BY_EXT = {
     ".tsx": "tsx", ".java": "java", ".kt": "kotlin", ".go": "go", ".c": "c", ".h": "c", ".cpp": "cpp",
     ".cc": "cpp", ".hpp": "cpp", ".cs": "csharp", ".rb": "ruby", ".rs": "rust", ".php": "php", ".scala": "scala",
 }
-CONFIG_EXT = {".yaml", ".yml", ".json", ".ini", ".cfg", ".conf", ".properties", ".toml", ".env", ".xml"}
+CONFIG_EXT = {".yaml", ".yml", ".json", ".ini", ".cfg", ".conf", ".properties", ".toml", ".env", ".xml",
+              ".xsd", ".xsl", ".xslt", ".bat", ".sample",
+              ".vsysvar", ".xvp", ".vsme", ".sil"}  # Vector CANoe/CANalyzer: system variables, panels, setups
+# CAPL (Vector CANoe) is C-like code: parsed with the C grammar so its functions are searchable symbols.
+# Other formats: team.json → index.code_ext {".ext": "<language>"} and index.config_ext [".ext", ...].
+LANG_BY_EXT.update({".can": "c", ".cin": "c", ".capl": "c"})
 SKIP_PARTS = {"node_modules", "vendor", "dist", "build", "target", ".venv", "venv", "__pycache__", "migrations", ".git"}
 MAX_BYTES = 400_000
 
@@ -59,13 +65,18 @@ def _ls_tree(repo: str, ref: str) -> dict[str, tuple[str, int]]:
     return out
 
 
-def _indexable(path: str) -> str | None:
+def _indexable(path: str, extra: dict | None = None) -> str | None:
+    """Language of a file ('config' for settings files), None = not indexed. `extra` (from team.json → index)
+    maps extensions to a language or 'config' and wins over the built-in lists."""
     p = PurePosixPath(path)
     if set(p.parts) & SKIP_PARTS or p.name.endswith((".min.js", ".lock")) or p.name == "package-lock.json":
         return None
-    if p.suffix in LANG_BY_EXT:
-        return LANG_BY_EXT[p.suffix]
-    if p.suffix in CONFIG_EXT or p.name.startswith(".env"):
+    suffix = p.suffix.lower()
+    if extra and suffix in extra:
+        return extra[suffix]
+    if suffix in LANG_BY_EXT:
+        return LANG_BY_EXT[suffix]
+    if suffix in CONFIG_EXT or p.name.startswith(".env"):
         return "config"
     return None
 
@@ -157,7 +168,9 @@ def _ts_symbols(src: bytes, lang: str, lines: list[str]) -> list[Sym] | None:
 
 def _py_ast_symbols(text: str, lines: list[str]) -> list[Sym] | None:
     try:
-        tree = ast.parse(text)
+        with warnings.catch_warnings():  # old files with "\d"-style strings warn on newer Pythons: noise only
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(text)
     except SyntaxError:
         return None
     out: list[Sym] = []
@@ -211,17 +224,22 @@ def parse_file(path: str, data: bytes, lang: str) -> list[Sym]:
 
 
 # ---------------- main entry ----------------
-def index_repo(repo: str, ref: str, db_path, full: bool = False, fetch: bool = True, log=print) -> dict:
+def index_repo(repo: str, ref: str, db_path, full: bool = False, fetch: bool = True, log=print,
+               ext_map: dict | None = None) -> dict:
+    """`ext_map` = team.json → index extensions ({".ext": "<language>" | "config"}), see Config.index_ext()."""
     if fetch:
         subprocess.run(["git", "fetch", "--quiet", "origin"], cwd=repo, capture_output=True)
     commit = _git(repo, "rev-parse", ref).strip()
     con = connect(db_path)
     if full:
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM calls; DELETE FROM chunks;")
-    tree = {p: v for p, v in _ls_tree(repo, ref).items() if _indexable(p)}
-    existing = {r["path"]: r["sha"] for r in con.execute("SELECT path, sha FROM files")}
+    listing = _ls_tree(repo, ref)
+    langs = {p: lang for p in listing if (lang := _indexable(p, ext_map))}
+    tree = {p: v for p, v in listing.items() if p in langs}
+    existing = {r["path"]: (r["sha"], r["lang"]) for r in con.execute("SELECT path, sha, lang FROM files")}
     removed = [p for p in existing if p not in tree]
-    changed = [p for p, (sha, _) in tree.items() if existing.get(p) != sha]
+    # re-parse when the content changed OR the file's type setting changed (e.g. .can moved from config to code)
+    changed = [p for p, (sha, _) in tree.items() if existing.get(p) != (sha, langs[p])]
 
     def drop(path):
         ids = [r[0] for r in con.execute("SELECT id FROM symbols WHERE path=?", (path,))]
@@ -236,7 +254,7 @@ def index_repo(repo: str, ref: str, db_path, full: bool = False, fetch: bool = T
 
     n_sym = 0
     for path, data in _cat_blobs(repo, [(p, tree[p][0]) for p in changed]):
-        lang = _indexable(path)
+        lang = langs[path]
         syms = parse_file(path, data, lang)
         con.execute("INSERT INTO files(path, sha, lang, lines) VALUES (?,?,?,?)",
                     (path, tree[path][0], lang, data.count(b"\n") + 1))

@@ -14,9 +14,30 @@ from .shared import atomic_write, ensure_layout
 COPILOT_HOME = Path.home() / ".copilot"
 
 
+def _clean_input(value: str) -> str:
+    """Windows 'Copy as path' pastes "C:\\path" with quotes; strip them."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1].strip()
+    return value
+
+
 def _ask(label: str, default: str = "") -> str:
-    v = input(f"{label}{f' [{default}]' if default else ''}: ").strip()
+    v = _clean_input(input(f"{label}{f' [{default}]' if default else ''}: "))
     return v or default
+
+
+def _team_defaults(shared: str) -> dict:
+    p = Path(shared) / "config" / "team.json"
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except ValueError:
+        return {}
+
+
+def _is_placeholder(url: str) -> bool:
+    url = (url or "").strip().lower()
+    return not url or "yourorg" in url
 
 
 def find_shared_folder() -> str:
@@ -76,11 +97,27 @@ def schedule_task() -> str:
     return f"add to crontab:  */10 * * * * {exe} run >> {C.HOME}/run.log 2>&1"
 
 
-def seed_team_folder(cfg: C.Config) -> None:
+def seed_team_folder(cfg: C.Config, jira_base_url: str = "") -> None:
+    """Create team.json from the example on first run; fill in the Jira URL (if still a placeholder) and
+    your display name/email. Existing values are never overwritten."""
     team = cfg.shared / "config" / "team.json"
-    if not team.exists():
-        shutil.copy2(C.ASSETS / "team.example.json", team)
-        print(f"! Created {team} from the example. Fill in jira, models and the test commands.")
+    created = not team.exists()
+    data = json.loads((C.ASSETS / "team.example.json" if created else team).read_text(encoding="utf-8"))
+    changed = created
+    jira = data.setdefault("jira", {})
+    if jira_base_url and _is_placeholder(jira.get("base_url", "")):
+        jira["base_url"] = jira_base_url.rstrip("/")
+        if ".atlassian.net" in jira_base_url:
+            jira["api_version"] = "3"
+        changed = True
+    me = data.setdefault("members", {}).setdefault(cfg.user_id, {})
+    for k, v in (("name", cfg.user_id), ("email", cfg.user_email)):
+        if v and not me.get(k):
+            me[k] = v
+            changed = True
+    if changed:
+        team.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"! {'Created' if created else 'Updated'} {team}. Check jira.scope_jql, models and the test commands.")
     agents = cfg.shared / "agents"
     if not any(agents.glob("forge-*.agent.md")):
         for f in (C.ASSETS / "agents").glob("forge-*.agent.md"):
@@ -91,11 +128,16 @@ def seed_team_folder(cfg: C.Config) -> None:
 def run() -> None:
     print("AI Forge setup\n")
     existing = json.loads(C.LOCAL_CONFIG.read_text(encoding="utf-8")) if C.LOCAL_CONFIG.exists() else {}
-    shared = _ask("Shared folder (synced SharePoint 'AI-Forge-Shared')", existing.get("shared_dir") or find_shared_folder())
+    shared = _ask("Shared folder ('AI-Forge-Shared' inside your work OneDrive)",
+                  existing.get("shared_dir") or find_shared_folder())
     if not Path(shared).is_dir():
-        raise SystemExit("Shared folder not found. Sync the team SharePoint library first, then rerun.")
+        raise SystemExit("Shared folder not found. Create AI-Forge-Shared in your work OneDrive, let it sync, then rerun.")
+    defaults = _team_defaults(shared)
     user_id = _ask("Your short id (e.g. sai)", existing.get("user_id", getpass.getuser().lower()))
-    email = _ask("Your work email", existing.get("user_email", ""))
+    email = _ask("Your work email (the one you sign in to Teams with)", existing.get("user_email", ""))
+    url = os.environ.get("JIRA_BASE_URL") or (defaults.get("jira") or {}).get("base_url", "")
+    jira_base_url = _ask("Jira base URL, e.g. https://yourcompany.atlassian.net (Enter to skip)",
+                         "" if _is_placeholder(url) else url)
     repo = _ask("Path to your local clone of the support project", existing.get("repo_path", ""))
     if not (Path(repo) / ".git").exists():
         raise SystemExit("That path is not a git repository.")
@@ -103,7 +145,7 @@ def run() -> None:
     cfg = C.Config(user_id=user_id, user_email=email, repo_path=repo, shared_dir=shared,
                    mcp_mode=existing.get("mcp_mode", "agent"))
     ensure_layout(cfg.shared)
-    seed_team_folder(cfg)
+    seed_team_folder(cfg, jira_base_url)
     C.save(cfg)
     cfg = C.load()
 
@@ -120,7 +162,7 @@ def run() -> None:
 
     from .index.indexer import build_repo_map, index_repo
     print("• building code index (first run can take a few minutes)...")
-    index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db)
+    index_repo(cfg.repo_path, cfg.base_ref, cfg.index_db, ext_map=cfg.index_ext())
     build_repo_map(cfg.index_db, cfg.repo_map)
     print("•", schedule_task())
 

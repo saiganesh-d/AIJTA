@@ -9,6 +9,7 @@ dependencies = [
   "jsonschema>=4.21",
   "mcp>=1.2",
   "tree-sitter-language-pack>=0.7",
+  "pypdf>=4",  # text from PDF attachments
 ]
 
 [project.optional-dependencies]

@@ -17,9 +17,15 @@
     ],
     "post_comments": false,
     "verify_tls": true,
-    "sprint_field": "customfield_10020"
+    "sprint_field": "customfield_10020",
+    "max_attachment_mb": 10,
+    "allow_closed_for_eval": false
   },
   "base_ref": "origin/main",
+  "index": {
+    "code_ext": {},
+    "config_ext": []
+  },
   "models": {
     "forge-doctor": "auto",
     "forge-config": "auto",
@@ -54,7 +60,9 @@
     "past_evidence": true,
     "past_evidence_min_score": 0.5,
     "past_evidence_max_blocks": 2,
-    "learn_gaps": true
+    "learn_gaps": true,
+    "attachment_files": true,
+    "attachment_files_max_mb": 10
   },
   "test": {
     "full": "pytest -q",

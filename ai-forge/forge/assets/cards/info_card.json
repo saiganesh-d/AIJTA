@@ -4,7 +4,7 @@
   "version": "1.4",
   "body": [
     {"type": "TextBlock", "text": "ℹ ${title}", "weight": "Bolder", "size": "Medium", "wrap": true},
-    {"type": "TextBlock", "text": "${ticketLinks} · not a code change", "wrap": true, "isSubtle": true},
+    {"type": "TextBlock", "text": "${ticketLinks} · ${infoSubtitle}", "wrap": true, "isSubtle": true},
     {"type": "FactSet", "facts": [
       {"title": "Type", "value": "${classification}"},
       {"title": "Where", "value": "${where}"},
